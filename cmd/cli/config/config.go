@@ -17,12 +17,14 @@ const (
 type Config interface {
 	OutputFormat() string
 	HubAddress() string
+	Bootnodes() []string
 }
 
 // cliConfig implements Config interface
 type cliConfig struct {
-	HubAddr   string `required:"false" default:"" yaml:"hub_address"`
-	OutFormat string `required:"false" default:"" yaml:"output_format"`
+	HubAddr   string   `required:"false" default:"" yaml:"hub_address"`
+	OutFormat string   `required:"false" default:"" yaml:"output_format"`
+	Bootnode  []string `required:"false" yaml:"boot_nodes"`
 }
 
 func (cc *cliConfig) OutputFormat() string {
@@ -31,6 +33,10 @@ func (cc *cliConfig) OutputFormat() string {
 
 func (cc *cliConfig) HubAddress() string {
 	return cc.HubAddr
+}
+
+func (cc *cliConfig) Bootnodes() []string {
+	return cc.Bootnode
 }
 
 func (cc *cliConfig) getConfigPath() (string, error) {

@@ -57,8 +57,8 @@ func (srv *Server) Serve() {
 
 func (srv *Server) discovery() {
 	srv.Frd.AddHandling(nil, nil, func(msg *whisperv2.Message) {
-		log.Print("Handling discovery message")
 		body := fmt.Sprintf("%s,v1", srv.HubIp)
-		srv.Frd.Send(body, true, common.TopicMinerDiscover)
+		log.Printf("Handling discovery message | RS: %s\r\n", body)
+		srv.Frd.Send(body, false, common.TopicMinerDiscover)
 	}, common.TopicHubDiscover)
 }

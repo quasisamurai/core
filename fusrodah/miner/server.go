@@ -74,8 +74,7 @@ func newInMemHubStorage() HubStorage {
 	return &inMemHubStorage{data: map[string]*HubInfo{}}
 }
 
-func NewServer(prv *ecdsa.PrivateKey) (srv *Server, err error) {
-
+func NewServer(prv *ecdsa.PrivateKey, bootn ...string) (srv *Server, err error) {
 	if prv == nil {
 		prv, err = crypto.GenerateKey()
 		if err != nil {
@@ -83,7 +82,12 @@ func NewServer(prv *ecdsa.PrivateKey) (srv *Server, err error) {
 		}
 	}
 
-	bootnodes := []string{common.BootNodeAddr, common.SecondBootNodeAddr}
+	var bootnodes []string
+	if len(bootn) == 0 {
+		bootnodes = []string{common.BootNodeAddr, common.SecondBootNodeAddr}
+	} else {
+		bootnodes = bootn
+	}
 
 	frd, err := fusrodah.NewServer(prv, defaultMinerPort, bootnodes)
 	if err != nil {

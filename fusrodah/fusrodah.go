@@ -48,7 +48,6 @@ type Fusrodah struct {
 
 // NewServer builds new Fusrodah server instance
 func NewServer(prv *ecdsa.PrivateKey, port string, enodes []string) (frd *Fusrodah, err error) {
-
 	if prv == nil {
 		prv, err = crypto.GenerateKey()
 		if err != nil {

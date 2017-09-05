@@ -107,7 +107,7 @@ func (it *grpcInteractor) TaskStop(appCtx context.Context, taskID string) (*pb.S
 }
 
 func (it *grpcInteractor) HubFind(ctx context.Context, to time.Duration) ([]*frd.HubInfo, error) {
-	srv, err := frd.NewServer(nil)
+	srv, err := frd.NewServer(nil, cfg.Bootnodes()...)
 	if err != nil {
 		return nil, err
 	}
