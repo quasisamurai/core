@@ -3,6 +3,7 @@ package commands
 import (
 	"time"
 
+	frd "github.com/sonm-io/core/fusrodah/miner"
 	pb "github.com/sonm-io/core/proto"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
@@ -11,6 +12,7 @@ import (
 type CliInteractor interface {
 	HubPing(context.Context) (*pb.PingReply, error)
 	HubStatus(context.Context) (*pb.HubStatusReply, error)
+	HubFind(context.Context, time.Duration) ([]*frd.HubInfo, error)
 
 	MinerList(context.Context) (*pb.ListReply, error)
 	MinerStatus(minerID string, appCtx context.Context) (*pb.InfoReply, error)
@@ -104,11 +106,31 @@ func (it *grpcInteractor) TaskStop(appCtx context.Context, taskID string) (*pb.S
 	return pb.NewHubClient(it.cc).StopTask(ctx, req)
 }
 
-func NewGrpcInteractor(addr string, to time.Duration) (CliInteractor, error) {
-	i := &grpcInteractor{timeout: to}
-	err := i.call(addr)
+func (it *grpcInteractor) HubFind(ctx context.Context, to time.Duration) ([]*frd.HubInfo, error) {
+	srv, err := frd.NewServer(nil)
 	if err != nil {
 		return nil, err
+	}
+
+	err = srv.Start()
+	if err != nil {
+		return nil, err
+	}
+
+	srv.Serve()
+	// set time to search for hubs into network
+	hubs := srv.Rediscovery(time.NewTimer(to), true)
+	// todo: try to connect to
+	return hubs, nil
+}
+
+func NewGrpcInteractor(addr string, to time.Duration) (CliInteractor, error) {
+	i := &grpcInteractor{timeout: to}
+	if addr != "" {
+		err := i.call(addr)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return i, nil

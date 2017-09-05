@@ -2,7 +2,10 @@ package miner
 
 import (
 	"crypto/ecdsa"
+	"log"
 	"time"
+
+	"sync"
 
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/whisper/whisperv2"
@@ -21,6 +24,54 @@ type Server struct {
 	PrivateKey *ecdsa.PrivateKey
 	Frd        *fusrodah.Fusrodah
 	Hub        *HubInfo
+	knownHubs  HubStorage
+}
+
+type HubStorage interface {
+	PutItem(info *HubInfo)
+	GetItem(addr string) (*HubInfo, bool)
+	GetAll() []*HubInfo
+}
+
+type inMemHubStorage struct {
+	sync.RWMutex
+	// data maps hub addr to it pub key
+	data map[string]*HubInfo
+}
+
+func (s *inMemHubStorage) PutItem(info *HubInfo) {
+	s.Lock()
+	defer s.Unlock()
+
+	s.data[info.Address] = info
+}
+
+func (s *inMemHubStorage) GetItem(addr string) (*HubInfo, bool) {
+	s.Lock()
+	defer s.Unlock()
+
+	if hub, ok := s.data[addr]; ok {
+		return hub, ok
+	} else {
+		return nil, false
+	}
+}
+
+func (s *inMemHubStorage) GetAll() []*HubInfo {
+	s.Lock()
+	defer s.Unlock()
+
+	hubs := make([]*HubInfo, 0, len(s.data))
+	for _, hub := range s.data {
+		hubs = append(hubs, hub)
+	}
+
+	return hubs
+}
+
+// TODO(sshaman1101): test storage impl
+func newInMemHubStorage() HubStorage {
+	return &inMemHubStorage{data: map[string]*HubInfo{}}
 }
 
 func NewServer(prv *ecdsa.PrivateKey) (srv *Server, err error) {
@@ -42,6 +93,7 @@ func NewServer(prv *ecdsa.PrivateKey) (srv *Server, err error) {
 	srv = &Server{
 		PrivateKey: prv,
 		Frd:        frd,
+		knownHubs:  newInMemHubStorage(),
 	}
 
 	return srv, nil
@@ -103,4 +155,38 @@ func (srv *Server) GetHub() *HubInfo {
 func (srv *Server) GetPubKeyString() string {
 	pkString := string(crypto.FromECDSAPub(&srv.PrivateKey.PublicKey))
 	return pkString
+}
+
+func (srv *Server) Rediscovery(timer *time.Timer, allowAnon bool) []*HubInfo {
+	hubChan := make(chan *HubInfo)
+	handlerID := srv.Frd.AddHandling(nil, nil, func(msg *whisperv2.Message) {
+		if hubKey := msg.Recover(); hubKey != nil || allowAnon {
+			h := &HubInfo{
+				PublicKey: hubKey,
+				Address:   string(msg.Payload),
+			}
+			hubChan <- h
+		} else {
+			log.Printf("Drop anonymous response: %s\r\n", string(msg.Payload))
+		}
+	}, common.TopicMinerDiscover)
+
+	t := time.NewTicker(5 * time.Second)
+	defer t.Stop()
+
+	for {
+		select {
+		case hub := <-hubChan:
+			log.Printf("Read from chan, Saving hub")
+			srv.knownHubs.PutItem(hub)
+		case <-t.C:
+			log.Printf("Broadcasing discovery topic")
+			srv.Frd.Send(srv.GetPubKeyString(), true, common.TopicHubDiscover)
+		case <-timer.C:
+			log.Printf("Timer expires, finishing dicsovery")
+			close(hubChan)
+			srv.Frd.RemoveHandling(handlerID)
+			return srv.knownHubs.GetAll()
+		}
+	}
 }

@@ -10,7 +10,7 @@ import (
 )
 
 func init() {
-	hubRootCmd.AddCommand(hubPingCmd, hubStatusCmd)
+	hubRootCmd.AddCommand(hubPingCmd, hubStatusCmd, hubFindCmd)
 }
 
 // --- hub commands
@@ -49,6 +49,19 @@ var hubStatusCmd = &cobra.Command{
 	},
 }
 
+var hubFindCmd = &cobra.Command{
+	Use:   "find",
+	Short: "Find hubs into SONM network",
+	Run: func(cmd *cobra.Command, _ []string) {
+		itr, err := NewGrpcInteractor(hubAddress, timeout)
+		if err != nil {
+			showError(cmd, "Cannot connect to hub", err)
+			return
+		}
+		hubFindCmdRunner(cmd, itr)
+	},
+}
+
 func hubPingCmdRunner(cmd *cobra.Command, interactor CliInteractor) {
 	_, err := interactor.HubPing(context.Background())
 	if err != nil {
@@ -60,7 +73,6 @@ func hubPingCmdRunner(cmd *cobra.Command, interactor CliInteractor) {
 }
 
 func hubStatusCmdRunner(cmd *cobra.Command, interactor CliInteractor) {
-	// todo: implement this on hub
 	stat, err := interactor.HubStatus(context.Background())
 	if err != nil {
 		showError(cmd, "Cannot get status", err)
@@ -68,6 +80,22 @@ func hubStatusCmdRunner(cmd *cobra.Command, interactor CliInteractor) {
 	}
 
 	printHubStatus(cmd, stat)
+}
+
+func hubFindCmdRunner(cmd *cobra.Command, interactor CliInteractor) {
+	hubs, err := interactor.HubFind(context.Background(), 30*time.Second)
+	if err != nil {
+		showError(cmd, "Cannot get Hubs", err)
+		return
+	}
+
+	for _, h := range hubs {
+		if h.PublicKey != nil {
+			cmd.Printf("Hub: %s\r\n", h.Address)
+		} else {
+			cmd.Printf("Hub: %s (ANON)\r\n", h.Address)
+		}
+	}
 }
 
 func printHubStatus(cmd *cobra.Command, stat *pb.HubStatusReply) {

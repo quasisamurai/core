@@ -6,6 +6,7 @@ import (
 	"github.com/ethereum/go-ethereum/whisper/whisperv2"
 	"github.com/sonm-io/core/common"
 	"github.com/sonm-io/core/fusrodah"
+	"log"
 )
 
 const defaultHubPort = ":30343"
@@ -51,11 +52,13 @@ func (srv *Server) Stop() (err error) {
 }
 
 func (srv *Server) Serve() {
+	log.Print("[ii] Starting discovery")
 	srv.discovery()
 }
 
 func (srv *Server) discovery() {
 	srv.Frd.AddHandling(nil, nil, func(msg *whisperv2.Message) {
+		log.Print("Sending discovery message...")
 		srv.Frd.Send(srv.HubIp, false, common.TopicMinerDiscover)
 	}, common.TopicHubDiscover)
 }
