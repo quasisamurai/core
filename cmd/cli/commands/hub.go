@@ -83,7 +83,7 @@ func hubStatusCmdRunner(cmd *cobra.Command, interactor CliInteractor) {
 }
 
 func hubFindCmdRunner(cmd *cobra.Command, interactor CliInteractor) {
-	hubs, err := interactor.HubFind(context.Background(), 30*time.Second)
+	hubs, err := interactor.HubFind(context.Background(), 15*time.Second)
 	if err != nil {
 		showError(cmd, "Cannot get Hubs", err)
 		return
