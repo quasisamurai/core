@@ -32,7 +32,6 @@ import (
 	"github.com/sonm-io/core/insonmnia/resource"
 	pb "github.com/sonm-io/core/proto"
 	"github.com/sonm-io/core/util"
-	"net/rpc"
 )
 
 const tasksPrefix = "sonm/hub/tasks"
@@ -72,6 +71,8 @@ type Hub struct {
 
 	leaderClient     pb.HubClient
 	leaderClientLock sync.Mutex
+
+	stopCh chan struct{}
 }
 
 // Ping should be used as Healthcheck for Hub
@@ -434,9 +435,9 @@ func (h *Hub) TaskStatus(ctx context.Context, request *pb.TaskStatusRequest) (*p
 		return nil, err
 	}
 
-	mincli, ok := h.getMinerByID(task.Miner)
+	mincli, ok := h.getMinerByID(task.MinerId)
 	if !ok {
-		return nil, status.Errorf(codes.NotFound, "no miner %s for task %s", task.Miner, taskID)
+		return nil, status.Errorf(codes.NotFound, "no miner %s for task %s", task.MinerId, taskID)
 	}
 
 	req := &pb.TaskStatusRequest{Id: taskID}
@@ -661,6 +662,7 @@ func (h *Hub) Serve() error {
 
 // Close disposes all capabilitiesCurrent attached to the Hub
 func (h *Hub) Close() {
+	h.stopCh <- struct{}{}
 	h.externalGrpc.Stop()
 	h.minerListener.Close()
 	if h.gateway != nil {
