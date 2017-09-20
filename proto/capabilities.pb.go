@@ -18,7 +18,6 @@ It has these top-level messages:
 	ListRequest
 	ListReply
 	HubInfoRequest
-	TaskResourceRequirements
 	TaskRequirements
 	HubStartTaskRequest
 	HubStartTaskReply
@@ -37,10 +36,10 @@ It has these top-level messages:
 	TaskStatusRequest
 	TaskStatusReply
 	StatusMapReply
-	ContainerResources
 	ContainerRestartPolicy
 	TaskLogsRequest
 	TaskLogsChunk
+	TaskResourceRequirements
 	MinerInfoRequest
 	MinerHandshakeRequest
 	MinerHandshakeReply

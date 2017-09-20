@@ -16,7 +16,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/hashicorp/yamux"
 	log "github.com/noxiouz/zapctx/ctxlog"
 
 	pb "github.com/sonm-io/core/proto"
@@ -222,11 +221,19 @@ func transformRestartPolicy(p *pb.ContainerRestartPolicy) container.RestartPolic
 	return restartPolicy
 }
 
-func transformResources(p *pb.ContainerResources) container.Resources {
+func transformGPUSupport(p *pb.TaskResourceRequirements) bool {
+	if p == nil {
+		return false
+	}
+
+	return p.GetGPUSupport()
+}
+
+func transformResources(p *pb.TaskResourceRequirements) container.Resources {
 	var resources = container.Resources{}
 	if p != nil {
 		resources.NanoCPUs = p.NanoCPUs
-		resources.Memory = p.Memory
+		resources.Memory = p.MaxMemory
 	}
 
 	return resources
@@ -243,17 +250,20 @@ func transformEnvVariables(m map[string]string) []string {
 
 // Start request from Hub makes Miner start a container
 func (m *Miner) Start(ctx context.Context, request *pb.MinerStartRequest) (*pb.MinerStartReply, error) {
+	log.G(m.ctx).Info("handling Start request", zap.Any("req", request))
+
 	var d = Description{
 		Image:         request.Image,
 		Registry:      request.Registry,
 		Auth:          request.Auth,
 		RestartPolicy: transformRestartPolicy(request.RestartPolicy),
-		Resources:     transformResources(request.Resources),
+		Resources:     transformResources(request.Usage),
 		TaskId:        request.Id,
 		CommitOnStop:  request.CommitOnStop,
 		Env:           transformEnvVariables(request.Env),
+		GPURequired:   transformGPUSupport(request.Usage),
 	}
-	log.G(m.ctx).Info("handling Start request", zap.Any("req", request))
+
 	var publicKey ssh.PublicKey
 	if len(request.PublicKeyData) != 0 {
 		var err error
@@ -264,11 +274,13 @@ func (m *Miner) Start(ctx context.Context, request *pb.MinerStartRequest) (*pb.M
 		publicKey = k
 	}
 
-	var mem = int64(0)
-	if request.Resources != nil {
-		mem = request.Resources.Memory
+	var numCPUs = 1
+	var memory = int64(0)
+	if request.Usage != nil {
+		numCPUs = int(request.Usage.CPUCores)
+		memory = request.Usage.MaxMemory
 	}
-	var usage = resource.NewResources(1, mem)
+	var usage = resource.NewResources(numCPUs, memory)
 
 	if err := m.resources.Consume(&usage); err != nil {
 		return nil, status.Errorf(codes.ResourceExhausted, "failed to Start %v", err)
@@ -477,6 +489,7 @@ func (m *Miner) connectToHub(address string) {
 	// Connect to the Hub
 	var d = net.Dialer{
 		DualStack: true,
+		KeepAlive: 5 * time.Second,
 	}
 	conn, err := d.DialContext(m.ctx, "tcp", address)
 	if err != nil {
@@ -485,48 +498,28 @@ func (m *Miner) connectToHub(address string) {
 	}
 	defer conn.Close()
 
-	// HOLD reference
-	session, err := yamux.Server(conn, nil)
-	if err != nil {
-		log.G(m.ctx).Error("failed to create yamux.Server", zap.Error(err))
-		return
-	}
-	defer session.Close()
-
-	yaConn, err := session.Accept()
-	if err != nil {
-		log.G(m.ctx).Error("failed to Accept yamux.Stream", zap.Error(err))
-		return
-	}
-	defer yaConn.Close()
-
 	// Push the connection to a pool for grpcServer
-	if err = m.rl.enqueue(yaConn); err != nil {
+	if err = m.rl.enqueue(conn); err != nil {
 		log.G(m.ctx).Error("failed to enqueue yaConn for gRPC server", zap.Error(err))
 		return
 	}
 
-	go func() {
-		for {
-			conn, err := session.Accept()
-			if err != nil {
-				return
-			}
-			conn.Close()
-		}
-	}()
-
+	// NOTE: it's not the best soluction
+	// It's needed to detect connection failure.
+	// Refactor: to detect reconnection from Accept
+	// Look at LimitListener
+	var zeroFrame = make([]byte, 0)
 	t := time.NewTicker(time.Second * 5)
 	defer t.Stop()
 	for {
 		select {
 		case <-t.C:
-			rtt, err := session.Ping()
+			log.G(m.ctx).Info("check status of TCP connection to a Hub")
+			_, err := conn.Read(zeroFrame)
 			if err != nil {
-				log.G(m.ctx).Error("failed to Ping yamux.Session", zap.Error(err))
 				return
 			}
-			log.G(m.ctx).Info("yamux.Ping OK", zap.Duration("rtt", rtt))
+			log.G(m.ctx).Info("connection to Hub is OK")
 		case <-m.ctx.Done():
 			return
 		}
