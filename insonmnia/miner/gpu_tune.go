@@ -18,12 +18,12 @@ type nvidiaPluginArgs struct {
 }
 
 type nvidiaGPUTuner interface {
-	Tune(containerconfig *container.Config, hostconfig *container.HostConfig) error
+	Tune(hostconfig *container.HostConfig) error
 }
 
 type nilGPUTuner struct{}
 
-func (nilGPUTuner) Tune(containerconfig *container.Config, hostconfig *container.HostConfig) error {
+func (nilGPUTuner) Tune(hostconfig *container.HostConfig) error {
 	return nil
 }
 
@@ -53,21 +53,22 @@ func newGPUTuner(config *GPUConfig) (nvidiaGPUTuner, error) {
 	return &gpuTuner{args: args}, nil
 }
 
-func (g *gpuTuner) Tune(containerconfig *container.Config, hostconfig *container.HostConfig) error {
+func (g *gpuTuner) Tune(hostconfig *container.HostConfig) error {
 	// This tunes configs to get the same result as docker run with:
 	// --volume-driver=nvidia-docker --volume=nvidia_driver_375.66:/usr/local/nvidia:ro --device=/dev/nvidiactl --device=/dev/nvidia-uvm --device=/dev/nvidia-uvm-tools --device=/dev/nvidia
 
 	// volumes must be provisioned by docker-nvidia-plugin
 	// TODO: can we do the same but w/o plugin? Be a plugin for docker?
 	hostconfig.VolumeDriver = g.args.VolumeDriver
-	// attach volumes with nvidia libraries and tools
-	for _, volume := range g.args.Volumes {
-		containerconfig.Volumes[volume] = struct{}{}
-	}
 
+	// bind driver volumes inside container
+	hostconfig.Binds = g.args.Volumes
 	// bind devices inside container
 	for _, device := range g.args.Devices {
-		hostconfig.Devices = append(hostconfig.Devices, container.DeviceMapping{PathOnHost: device})
+		hostconfig.Devices = append(hostconfig.Devices, container.DeviceMapping{
+			PathOnHost:        device,
+			CgroupPermissions: "rwm",
+		})
 	}
 
 	return nil
