@@ -5,8 +5,12 @@ import (
 	"net"
 
 	"bytes"
+	"errors"
 	"io/ioutil"
 	"net/http"
+	"os/user"
+	"runtime"
+	"strconv"
 )
 
 // GetLocalIP find local non-loopback ip addr
@@ -56,4 +60,34 @@ func GetPublicIP() (net.IP, error) {
 		return nil, fmt.Errorf("failed to ParseIP from: %s", s)
 	}
 	return pubipadr, nil
+}
+
+func GetUserHomeDir() (homeDir string, err error) {
+	usr, err := user.Current()
+	if err != nil {
+		return "", err
+	}
+	return usr.HomeDir, nil
+}
+
+func ParseEndpointPort(s string) (string, error) {
+	_, port, err := net.SplitHostPort(s)
+	if err != nil {
+		return "", err
+	}
+
+	intPort, err := strconv.Atoi(port)
+	if err != nil {
+		return "", err
+	}
+
+	if intPort < 1 || intPort > 65535 {
+		return "", errors.New("Invalid port value")
+	}
+
+	return port, nil
+}
+
+func GetPlatformName() string {
+	return fmt.Sprintf("%s/%s/%s", runtime.GOOS, runtime.GOARCH, runtime.Version())
 }

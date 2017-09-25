@@ -1,10 +1,12 @@
 #!/usr/bin/env make
-VER = v0.1
+VER = v0.2.1.1
 BUILD = $(shell git rev-parse --short HEAD)
-FULL_VER = $(VER).$(BUILD)
+FULL_VER = $(VER)-$(BUILD)
 
 GOCMD=./cmd
-GO=go
+ifeq ($(GO), )
+    GO=go
+endif
 INSTALLDIR=${GOPATH}/bin
 
 BOOTNODE=sonmbootnode
@@ -16,66 +18,95 @@ DOCKER_IMAGE_HUB="sonm/hub:latest"
 DOCKER_IMAGE_MINER="sonm/miner:latest"
 DOCKER_IMAGE_BOOTNODE="sonm/bootnode:latest"
 
+GPU_SUPPORT?=false
+ifeq ($(GPU_SUPPORT),true)
+    GPU_FLAGS=-tags cl
+endif
 
 .PHONY: fmt vet test
 
-all: vet fmt test build install
+all: mock vet fmt build test install
 
-
-build_bootnode:
+build/bootnode:
 	@echo "+ $@"
 	${GO} build -tags nocgo -ldflags "-s -X main.version=$(FULL_VER)" -o ${BOOTNODE} ${GOCMD}/bootnode
 
-build_miner:
+build/miner:
 	@echo "+ $@"
-	${GO} build -tags nocgo -o ${MINER} ${GOCMD}/miner
+	${GO} build -tags nocgo -ldflags "-s -X main.version=$(FULL_VER)" ${GPU_FLAGS} -o ${MINER} ${GOCMD}/miner
 
-
-build_hub:
+build/hub:
 	@echo "+ $@"
-	${GO} build -tags nocgo -o ${HUB} ${GOCMD}/hub
+	${GO} build -tags nocgo -ldflags "-s -X main.version=$(FULL_VER)" -o ${HUB} ${GOCMD}/hub
 
-build_cli:
+build/cli:
 	@echo "+ $@"
-	${GO} build -o ${CLI} ${GOCMD}/cli
+	${GO} build -tags nocgo -ldflags "-s -X github.com/sonm-io/core/cmd/cli/commands.version=$(FULL_VER)" -o ${CLI} ${GOCMD}/cli
 
+build/cli_win32:
+	@echo "+ $@"
+	GOOS=windows GOARCH=386 go build -tags nocgo -ldflags "-s -X github.com/sonm-io/core/cmd/cli/commands.version=$(FULL_VER).win32" -o ${CLI}_win32.exe ${GOCMD}/cli
 
-build: build_bootnode build_hub build_miner build_cli
+build/blockchain:
+	@echo "+ $@"
+	$(MAKE) -C blockchain build_contract_wrappers
 
-install_bootnode:
+build/insomnia: build/hub build/miner build/cli
+
+build: build/blockchain build/bootnode build/insomnia
+
+install/bootnode: build/bootnode
 	@echo "+ $@"
 	cp ${BOOTNODE} ${INSTALLDIR}
 
-install_miner:
+install/miner: build/miner
 	@echo "+ $@"
 	cp ${MINER} ${INSTALLDIR}
 
-install_hub:
+install/hub: build/hub
 	@echo "+ $@"
 	cp ${HUB} ${INSTALLDIR}
 
-install_cli:
+install/cli: build/cli
 	@echo "+ $@"
 	cp ${CLI} ${INSTALLDIR}
 
-install: install_bootnode install_miner install_hub install_cli
+install: install/bootnode install/miner install/hub install/cli
 
 vet:
 	@echo "+ $@"
-	@go vet $(PKGS)
+	@go tool vet $(shell ls -1 -d */ | grep -v -e vendor -e contracts)
 
 fmt:
 	@echo "+ $@"
 	@test -z "$$(gofmt -s -l . 2>&1 | grep -v ^vendor/ | tee /dev/stderr)" || \
 		(echo >&2 "+ please format Go code with 'gofmt -s'" && false)
 
-test:
+test: mock
 	@echo "+ $@"
-	@go test -tags nocgo $(shell go list ./... | grep -v vendor)
+	${GO} test -tags nocgo $(shell go list ./... | grep -vE 'vendor|blockchain')
+	$(MAKE) -C blockchain test
+
 
 grpc:
-	protoc -I proto proto/hub/hub.proto --go_out=plugins=grpc,Mminer/miner.proto=github.com/sonm-io/core/proto/miner:proto/
-	protoc -I proto proto/miner/miner.proto --go_out=plugins=grpc:proto/
+	@echo "+ $@"
+	@if ! which protoc > /dev/null; then echo "protoc protobuf compiler required for build"; exit 1; fi;
+	@if ! which protoc-gen-go > /dev/null; then echo "protoc-gen-go protobuf  plugin required for build.\nRun \`go get -u github.com/golang/protobuf/protoc-gen-go\`"; exit 1; fi;
+	@protoc -I proto proto/*.proto --go_out=plugins=grpc:proto/
+
+mock:
+	@echo "+ $@"
+	@if ! which mockgen > /dev/null; then \
+	echo "mockgen is required."; \
+	echo "Run \`go get github.com/golang/mock/gomock\`"; \
+	echo "\`go get github.com/golang/mock/mockgen\`"; \
+	echo "and add your go bin directory to PATH"; exit 1; fi;
+	mockgen -package miner -destination insonmnia/miner/overseer_mock.go -source insonmnia/miner/overseer.go
+	mockgen -package miner -destination insonmnia/miner/config_mock.go -source insonmnia/miner/config.go
+	mockgen -package hardware -destination insonmnia/hardware/hardware_mock.go -source insonmnia/hardware/hardware.go
+	mockgen -package config -destination cmd/cli/config/config_mock.go  -source cmd/cli/config/config.go
+	mockgen -package commands -destination cmd/cli/commands/interactor_mock.go  -source cmd/cli/commands/interactor.go
+	mockgen -package task_config -destination cmd/cli/task_config/config_mock.go  -source cmd/cli/task_config/config.go
 
 coverage:
 	${GO} tool cover -func=coverage.txt
@@ -87,15 +118,4 @@ clean:
 	rm -f coverage.html
 	rm -f funccoverage.txt
 	rm -f ${MINER} ${HUB} ${CLI} ${BOOTNODE}
-
-
-docker_hub:
-	docker build -t ${DOCKER_IMAGE_HUB} -f ./hub.Dockerfile .
-
-docker_miner:
-	docker build -t ${DOCKER_IMAGE_MINER} -f ./miner.Dockerfile .
-
-docker_bootnode:
-	docker build -t ${DOCKER_IMAGE_BOOTNODE} -f ./bootnode.Dockerfile .
-
-docker_all: docker_hub docker_miner docker_bootnode
+	#$(MAKE) -C blockchain clean

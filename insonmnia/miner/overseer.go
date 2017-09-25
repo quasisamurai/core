@@ -13,44 +13,106 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
+	"github.com/gliderlabs/ssh"
 	log "github.com/noxiouz/zapctx/ctxlog"
-	pb "github.com/sonm-io/core/proto/miner"
+	"github.com/sonm-io/core/insonmnia/resource"
+	pb "github.com/sonm-io/core/proto"
 )
 
 const overseerTag = "sonm.overseer"
 const dieEvent = "die"
 
-// Description for a target application
-// name, version, hash etc.
+// Description for a target application.
 type Description struct {
-	Registry string
-	Image    string
+	Registry      string
+	Image         string
+	Auth          string
+	RestartPolicy container.RestartPolicy
+	Resources     container.Resources
+	Cmd           []string
+	Env           []string
+	TaskId        string
+	CommitOnStop  bool
+
+	GPURequired bool
 }
 
+// ContainerInfo is a brief information about containers
 type ContainerInfo struct {
-	status *pb.TaskStatus
-	ID     string
-	Ports  nat.PortMap
+	status    *pb.TaskStatusReply
+	ID        string
+	ImageName string
+	StartAt   time.Time
+	Ports     nat.PortMap
+	Resources resource.Resources
+	PublicKey ssh.PublicKey
 }
 
+// ContainerMetrics are metrics collected from Docker about running containers
 type ContainerMetrics struct {
 	cpu types.CPUStats
 	mem types.MemoryStats
+	net map[string]types.NetworkStats
 }
+
+func (m *ContainerMetrics) Marshal() *pb.ResourceUsage {
+	network := make(map[string]*pb.NetworkUsage)
+	for i, n := range m.net {
+		network[i] = &pb.NetworkUsage{
+			TxBytes:   n.TxBytes,
+			RxBytes:   n.RxBytes,
+			TxPackets: n.TxPackets,
+			RxPackets: n.RxPackets,
+			TxErrors:  n.TxErrors,
+			RxErrors:  n.RxErrors,
+		}
+	}
+
+	return &pb.ResourceUsage{
+		Cpu: &pb.CPUUsage{
+			Total: m.cpu.CPUUsage.TotalUsage,
+		},
+		Memory: &pb.MemoryUsage{
+			MaxUsage: m.mem.MaxUsage,
+		},
+		Network: network,
+	}
+}
+
+type ExecConnection types.HijackedResponse
 
 // Overseer watches all miner's applications.
 type Overseer interface {
+	// Spool prepares an application for its further start.
+	//
+	// For Docker containers this is an equivalent of pulling from the registry.
 	Spool(ctx context.Context, d Description) error
-	Spawn(ctx context.Context, d Description) (chan pb.TaskStatus_Status, ContainerInfo, error)
+
+	// Start attempts to start an application using the specified description.
+	//
+	// After successful starting an application becomes a target for accepting request, but not guarantees
+	// to complete them.
+	Start(ctx context.Context, description Description) (chan pb.TaskStatusReply_Status, ContainerInfo, error)
+
+	// Exec a given command in running container
+	Exec(ctx context.Context, Id string, cmd []string, env []string, isTty bool, wCh <-chan ssh.Window) (types.HijackedResponse, error)
+
+	// Stop terminates the container.
 	Stop(ctx context.Context, containerID string) error
 
 	// Returns runtime statistics collected from all running containers.
 	//
 	// Depending on the implementation this can be cached.
 	Info(ctx context.Context) (map[string]ContainerMetrics, error)
+
+	// Fetch logs of the container
+	Logs(ctx context.Context, id string, opts types.ContainerLogsOptions) (io.ReadCloser, error)
+
+	// Close terminates all associated asynchronous operations and prepares the Overseer for shutting down.
 	Close() error
 }
 
@@ -62,17 +124,33 @@ type overseer struct {
 
 	registryAuth map[string]string
 
+	// GPU tuner
+	gpu      *GPUConfig
+	gpuTuner nvidiaGPUTuner
+
 	// protects containers map
 	mu         sync.Mutex
-	containers map[string]*dcontainer
-	statuses   map[string]chan pb.TaskStatus_Status
+	containers map[string]*containerDescriptor
+	statuses   map[string]chan pb.TaskStatusReply_Status
+}
+
+func (o *overseer) supportGPU() bool {
+	return o.gpu != nil
 }
 
 // NewOverseer creates new overseer
-func NewOverseer(ctx context.Context) (Overseer, error) {
-	dockclient, err := client.NewEnvClient()
+func NewOverseer(ctx context.Context, gpu *GPUConfig) (Overseer, error) {
+	dockerClient, err := client.NewEnvClient()
 	if err != nil {
 		return nil, err
+	}
+
+	var tuner nvidiaGPUTuner = nilGPUTuner{}
+	if gpu != nil {
+		tuner, err = newGPUTuner(gpu)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -80,10 +158,13 @@ func NewOverseer(ctx context.Context) (Overseer, error) {
 		ctx:    ctx,
 		cancel: cancel,
 
-		client: dockclient,
+		client: dockerClient,
 
-		containers: make(map[string]*dcontainer),
-		statuses:   make(map[string]chan pb.TaskStatus_Status),
+		gpu:      gpu,
+		gpuTuner: tuner,
+
+		containers: make(map[string]*containerDescriptor),
+		statuses:   make(map[string]chan pb.TaskStatusReply_Status),
 	}
 
 	go ovr.collectStats()
@@ -100,6 +181,7 @@ func (o *overseer) Info(ctx context.Context) (map[string]ContainerMetrics, error
 		metrics := ContainerMetrics{
 			cpu: container.stats.CPUStats,
 			mem: container.stats.MemoryStats,
+			net: container.stats.Networks,
 		}
 
 		info[container.ID] = metrics
@@ -139,22 +221,33 @@ func (o *overseer) handleStreamingEvents(ctx context.Context, sinceUnix int64, f
 				id := message.Actor.ID
 				log.G(ctx).Info("container has died", zap.String("id", id))
 
-				var c *dcontainer
+				var c *containerDescriptor
 				o.mu.Lock()
-				c, cok := o.containers[id]
-				s, sok := o.statuses[id]
+				c, container_found := o.containers[id]
+				s, status_found := o.statuses[id]
 				delete(o.containers, id)
 				delete(o.statuses, id)
 				o.mu.Unlock()
-				if sok {
-					s <- pb.TaskStatus_BROKEN
-				}
-				if cok {
-					c.remove()
-				} else {
+				if !container_found {
 					// NOTE: it could be orphaned container from our previous launch
 					log.G(ctx).Warn("unknown container with sonm tag will be removed", zap.String("id", id))
 					containerRemove(o.ctx, o.client, id)
+					continue
+				}
+				if status_found {
+					s <- pb.TaskStatusReply_BROKEN
+					close(s)
+				}
+				if c.description.CommitOnStop {
+					go func() {
+						log.G(ctx).Info("trying to upload container")
+						err := c.upload()
+						if err != nil {
+							log.G(ctx).Error("failed to commit container", zap.String("id", id), zap.Error(err))
+						}
+						c.remove()
+						c.cancel()
+					}()
 				}
 			default:
 				log.G(ctx).Warn("received unknown event", zap.String("status", message.Status))
@@ -197,7 +290,7 @@ func (o *overseer) watchEvents() {
 }
 
 func (o *overseer) collectStats() {
-	t := time.NewTicker(5 * time.Second)
+	t := time.NewTicker(30 * time.Second)
 	defer t.Stop()
 	for {
 		select {
@@ -218,7 +311,7 @@ func (o *overseer) collectStats() {
 					log.G(o.ctx).Warn("failed to get Stats", zap.String("id", id), zap.Error(err))
 					continue
 				}
-				var stats types.Stats
+				var stats types.StatsJSON
 				err = json.NewDecoder(resp.Body).Decode(&stats)
 				switch err {
 				case nil:
@@ -247,17 +340,8 @@ func (o *overseer) collectStats() {
 func (o *overseer) Spool(ctx context.Context, d Description) error {
 	log.G(ctx).Info("pull the application image")
 	options := types.ImagePullOptions{
-		All: false,
-	}
-
-	// if d.Registry == "" {
-	// 	log.G(ctx).Info("local registry will be used")
-	// 	return nil
-	// }
-
-	if registryAuth, ok := o.registryAuth[d.Registry]; ok {
-		log.G(ctx).Info("use credentials for the registry", zap.String("registry", d.Registry))
-		options.RegistryAuth = registryAuth
+		All:          false,
+		RegistryAuth: d.Auth,
 	}
 
 	refStr := filepath.Join(d.Registry, d.Image)
@@ -276,15 +360,24 @@ func (o *overseer) Spool(ctx context.Context, d Description) error {
 	return nil
 }
 
-func (o *overseer) Spawn(ctx context.Context, d Description) (status chan pb.TaskStatus_Status, cinfo ContainerInfo, err error) {
-	pr, err := newContainer(ctx, o.client, d)
+func (o *overseer) Start(ctx context.Context, description Description) (status chan pb.TaskStatusReply_Status, cinfo ContainerInfo, err error) {
+	var tuner nvidiaGPUTuner = nilGPUTuner{}
+	if description.GPURequired {
+		if !o.supportGPU() {
+			err = fmt.Errorf("GPU required but not supported or disabled")
+			return
+		}
+		tuner = o.gpuTuner
+	}
+
+	pr, err := newContainer(ctx, o.client, description, tuner)
 	if err != nil {
 		return
 	}
 
 	o.mu.Lock()
 	o.containers[pr.ID] = pr
-	status = make(chan pb.TaskStatus_Status)
+	status = make(chan pb.TaskStatusReply_Status)
 	o.statuses[pr.ID] = status
 	o.mu.Unlock()
 
@@ -298,27 +391,46 @@ func (o *overseer) Spawn(ctx context.Context, d Description) (status chan pb.Tas
 		return
 	}
 	cinfo = ContainerInfo{
-		status: &pb.TaskStatus{pb.TaskStatus_RUNNING},
-		ID:     cjson.ID,
-		Ports:  cjson.NetworkSettings.Ports,
+		status:    &pb.TaskStatusReply{Status: pb.TaskStatusReply_RUNNING},
+		ID:        cjson.ID,
+		Ports:     cjson.NetworkSettings.Ports,
+		Resources: resource.NewResources(1, description.Resources.Memory),
 	}
 	return status, cinfo, nil
+}
+
+func (o *overseer) Exec(ctx context.Context, id string, cmd []string, env []string, isTty bool, wCh <-chan ssh.Window) (ret types.HijackedResponse, err error) {
+	o.mu.Lock()
+	descriptor, dok := o.containers[id]
+	o.mu.Unlock()
+	if !dok {
+		err = fmt.Errorf("no such container %s", id)
+		return
+	}
+	ret, err = descriptor.execCommand(cmd, env, isTty, wCh)
+	return
 }
 
 func (o *overseer) Stop(ctx context.Context, containerid string) error {
 	o.mu.Lock()
 
-	pr, cok := o.containers[containerid]
-	s, sok := o.statuses[containerid]
-	delete(o.containers, containerid)
+	descriptor, dok := o.containers[containerid]
+	status, sok := o.statuses[containerid]
 	delete(o.statuses, containerid)
 	o.mu.Unlock()
+
 	if sok {
-		s <- pb.TaskStatus_FINISHED
+		status <- pb.TaskStatusReply_FINISHED
+		close(status)
 	}
 
-	if !cok {
+	if !dok {
 		return fmt.Errorf("no such container %s", containerid)
 	}
-	return pr.Kill()
+
+	return descriptor.Kill()
+}
+
+func (o *overseer) Logs(ctx context.Context, id string, opts types.ContainerLogsOptions) (io.ReadCloser, error) {
+	return o.client.ContainerLogs(ctx, id, opts)
 }

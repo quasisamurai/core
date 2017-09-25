@@ -1,5 +1,32 @@
-logger:
+# Hub settings. Optional.
+hub:
+  # Endpoint for hub communication, optional param
+  # Can be omitted, in this case a discovery mechanism is activated.
+  # format is "ip:port"
+  # endpoint: "127.0.0.1:10002"
+
+  # Resources section is available only on Linux
+  # If configured, all tasks will share this pool of resources.
+  # This pool is a parent control group.
+  # Format is Open Container Initiative Runtime Specification:
+  # resources:
+  # https://github.com/opencontainers/runtime-spec/blob/master/config-linux.md#memory
+  #     memory: { limit: 1000 }
+  # https://github.com/opencontainers/runtime-spec/blob/master/config-linux.md#cpu
+  #     cpu: {quota: 1024 cpus: "2-3" }
+  # https://github.com/opencontainers/runtime-spec/blob/master/config-linux.md#network
+  #     network: { classID: 1048577 }
+
+# Logging settings.
+logging:
+  # The desired logging level.
+  # Allowed values in range of -1 (high verbosity) to 3 (most quiet)
   level: -1
 
-miner:
-  hub_address: hub:10002
+# Firewall discovery settings, optional param
+# If enabled the miner tries to discover its own public IP address and the
+# firewall configuration. STUN server can be configured.
+# If disabled it is treated as having public IP address that is determined
+# automatically.
+# firewall:
+#   server: "stun.ekiga.net:3478"
