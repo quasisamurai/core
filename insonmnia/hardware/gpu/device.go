@@ -15,20 +15,37 @@ type Device interface {
 	// MaxMemorySize returns the total maximum memory size the device can hold
 	// in bytes.
 	MaxMemorySize() uint64
+	// OpenCLDeviceVersion returns the OpenCL version supported by the device.
+	OpenCLDeviceVersion() string
 }
 
 type device struct {
 	d pb.GPUDevice
 }
 
-func NewDevice(name, vendorName string, maxMemorySize uint64) Device {
-	return &device{
-		d: pb.GPUDevice{
-			Name:          name,
-			VendorName:    vendorName,
-			MaxMemorySize: maxMemorySize,
-		},
+type Option func(*pb.GPUDevice) error
+
+func WithOpenClDeviceVersion(version string) func(*pb.GPUDevice) error {
+	return func(d *pb.GPUDevice) error {
+		d.OpenCLVersion = version
+		return nil
 	}
+}
+
+func NewDevice(name, vendorName string, maxMemorySize uint64, options ...Option) (Device, error) {
+	d := pb.GPUDevice{
+		Name:          name,
+		VendorName:    vendorName,
+		MaxMemorySize: maxMemorySize,
+	}
+
+	for _, option := range options {
+		if err := option(&d); err != nil {
+			return nil, err
+		}
+	}
+
+	return &device{d: d}, nil
 }
 
 func (d *device) Name() string {
@@ -43,11 +60,16 @@ func (d *device) MaxMemorySize() uint64 {
 	return d.d.GetMaxMemorySize()
 }
 
+func (d *device) OpenCLDeviceVersion() string {
+	return d.d.GetOpenCLVersion()
+}
+
 func (d *device) MarshalJSON() ([]byte, error) {
 	return json.Marshal(map[string]interface{}{
-		"name":          d.Name(),
-		"vendorName":    d.VendorName(),
-		"maxMemorySize": d.MaxMemorySize(),
+		"name":                d.Name(),
+		"vendorName":          d.VendorName(),
+		"maxMemorySize":       d.MaxMemorySize(),
+		"openCLDeviceVersion": d.OpenCLDeviceVersion(),
 	})
 }
 

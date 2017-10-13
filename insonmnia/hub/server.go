@@ -2,10 +2,13 @@ package hub
 
 import (
 	"crypto/ecdsa"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math/rand"
 	"net"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,22 +26,20 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/ethereum/go-ethereum/crypto"
-	frd "github.com/sonm-io/core/fusrodah/hub"
-
-	"encoding/hex"
-	"encoding/json"
 	consul "github.com/hashicorp/consul/api"
+	frd "github.com/sonm-io/core/fusrodah/hub"
 	"github.com/sonm-io/core/insonmnia/gateway"
 	"github.com/sonm-io/core/insonmnia/resource"
+	"github.com/sonm-io/core/insonmnia/structs"
 	pb "github.com/sonm-io/core/proto"
 	"github.com/sonm-io/core/util"
-	"reflect"
 )
 
 var (
-	ErrBidRequired      = status.Errorf(codes.InvalidArgument, "bid field is required")
 	ErrInvalidOrderType = status.Errorf(codes.InvalidArgument, "invalid order type")
-	ErrLeaderStepDown   = status.Errorf(codes.Unavailable, "leader stepped down")
+	ErrAskNotFound      = status.Errorf(codes.NotFound, "ask not found")
+	ErrMinerNotFound    = status.Errorf(codes.NotFound, "miner not found")
+	ErrUnimplemented    = status.Errorf(codes.Unimplemented, "not implemented yet")
 )
 
 const tasksPrefix = "sonm/hub/tasks"
@@ -47,15 +48,21 @@ const leaderKey = "sonm/hub/leader"
 // Hub collects miners, send them orders to spawn containers, etc.
 type Hub struct {
 	// TODO (3Hren): Probably port pool should be associated with the gateway implicitly.
-	ctx           context.Context
-	gateway       *gateway.Gateway
-	portPool      *gateway.PortPool
-	grpcEndpoint  string
-	externalGrpc  *grpc.Server
-	endpoint      string
+	ctx              context.Context
+	gateway          *gateway.Gateway
+	portPool         *gateway.PortPool
+	grpcEndpoint     string
+	grpcEndpointAddr string
+	externalGrpc     *grpc.Server
+	endpoint         string
+	minerListener    net.Listener
+	ethKey           *ecdsa.PrivateKey
+
+	locatorEndpoint string
+	locatorPeriod   time.Duration
+	locatorClient   pb.LocatorClient
+
 	localEndpoint string
-	minerListener net.Listener
-	ethKey        *ecdsa.PrivateKey
 
 	mu     sync.Mutex
 	miners map[string]*MinerCtx
@@ -71,7 +78,7 @@ type Hub struct {
 
 	// Scheduling.
 	filters []minerFilter
-	consul  *consul.Client
+	consul  Consul
 
 	associatedHubs     map[string]struct{}
 	associatedHubsLock sync.Mutex
@@ -81,7 +88,8 @@ type Hub struct {
 	leaderClient     pb.HubClient
 	leaderClientLock sync.Mutex
 
-	stopCh chan struct{}
+	eth    ETH
+	market Market
 }
 
 // Ping should be used as Healthcheck for Hub
@@ -336,14 +344,14 @@ func (h *Hub) StartTask(ctx context.Context, request *pb.HubStartTaskRequest) (*
 	}
 
 	info := TaskInfo{*request, *resp, taskID, miner.uuid}
-	json, err := json.Marshal(info)
+	b, err := json.Marshal(info)
 	if err != nil {
 		miner.Client.Stop(ctx, &pb.StopTaskRequest{Id: taskID})
 		return nil, status.Errorf(codes.Internal, "could not marshal task info %v", err)
 	}
 
 	kv := h.consul.KV()
-	kvPair := consul.KVPair{Key: tasksPrefix + "/" + taskID, Value: json}
+	kvPair := consul.KVPair{Key: tasksPrefix + "/" + taskID, Value: b}
 	_, err = kv.Put(&kvPair, &consul.WriteOptions{})
 	if err != nil {
 		miner.Client.Stop(ctx, &pb.StopTaskRequest{Id: taskID})
@@ -470,8 +478,7 @@ func (h *Hub) TaskStatus(ctx context.Context, request *pb.TaskStatusRequest) (*p
 		return nil, status.Errorf(codes.NotFound, "no status report for task %s", taskID)
 	}
 
-	// todo: fill this field into miner method, use Miner.name (uuid) instead of addr
-	reply.MinerID = task.MinerId
+	reply.MinerID = mincli.ID()
 	return reply, nil
 }
 
@@ -502,22 +509,153 @@ func (h *Hub) TaskLogs(request *pb.TaskLogsRequest, server pb.Hub_TaskLogsServer
 	}
 }
 
-func (h *Hub) ProposeDeal(ctx context.Context, request *pb.DealRequest) (*pb.DealReply, error) {
+func (h *Hub) ProposeDeal(ctx context.Context, request *pb.DealRequest) (*pb.Empty, error) {
 	log.G(h.ctx).Info("handling ProposeDeal request", zap.Any("req", request))
 
-	order := request.GetOrder()
-	if order == nil {
-		return nil, ErrBidRequired
+	order, err := structs.NewOrder(request.GetOrder())
+	if err != nil {
+		return nil, err
 	}
-	if order.OrderType != pb.OrderType_BID {
+	if !order.IsBid() {
 		return nil, ErrInvalidOrderType
 	}
-	return nil, status.Errorf(codes.Unimplemented, "not implemented yet")
+	exists, err := h.market.OrderExists(order.GetID())
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, ErrAskNotFound
+	}
+	miner, err := h.getMinerByOrder(order)
+	if err != nil {
+		return nil, err
+	}
+	if err := h.eth.CreatePendingDeal(order); err != nil {
+		return nil, err
+	}
+
+	if err := miner.ReserveSlot(order.GetSlot()); err != nil {
+		h.eth.RevokePendingDeal(order)
+		return nil, err
+	}
+
+	return &pb.Empty{}, nil
+}
+
+func (h *Hub) ApproveDeal(ctx context.Context, request *pb.DealRequest) (*pb.Empty, error) {
+	// ApproveDeal.
+	// 1. Move from pending to reserved.
+	// 2. Notify man who put this ask.
+	return &pb.Empty{}, ErrUnimplemented
+}
+
+func (h *Hub) getMinerByOrder(order *structs.Order) (*MinerCtx, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for id, miner := range h.miners {
+		log.G(h.ctx).Debug("checking a miner for order", zap.String("miner", id))
+		// TODO (3Hren): What if more than one miner has the same slot? Are they equal?
+		if miner.HasSlot(order.GetSlot()) {
+			return miner, nil
+		}
+	}
+
+	return nil, ErrMinerNotFound
+}
+
+func (h *Hub) findRandomMinerBySlot(slot *structs.Slot) (*MinerCtx, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if len(h.miners) == 0 {
+		return nil, ErrMinerNotFound
+	}
+
+	rg := rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	id := 0
+	var result *MinerCtx = nil
+	for _, miner := range h.miners {
+		if miner.HasSlot(slot) {
+			id++
+			threshold := 1.0 / float64(id)
+			if rg.Float64() < threshold {
+				result = miner
+			}
+		}
+	}
+
+	return result, nil
 }
 
 func (h *Hub) DiscoverHub(ctx context.Context, request *pb.DiscoverHubRequest) (*pb.EmptyReply, error) {
 	h.onNewHub(request.Endpoint)
 	return &pb.EmptyReply{}, nil
+}
+
+func (h *Hub) GetMinerProperties(ctx context.Context, request *pb.GetMinerPropertiesRequest) (*pb.GetMinerPropertiesReply, error) {
+	log.G(h.ctx).Info("handling GetMinerProperties request", zap.Any("req", request))
+
+	miner, exists := h.getMinerByID(request.ID)
+	if !exists {
+		return nil, ErrMinerNotFound
+	}
+
+	return &pb.GetMinerPropertiesReply{Properties: miner.MinerProperties()}, nil
+}
+
+func (h *Hub) SetMinerProperties(ctx context.Context, request *pb.SetMinerPropertiesRequest) (*pb.Empty, error) {
+	log.G(h.ctx).Info("handling SetMinerProperties request", zap.Any("req", request))
+
+	miner, exists := h.getMinerByID(request.ID)
+	if !exists {
+		return nil, ErrMinerNotFound
+	}
+
+	miner.SetMinerProperties(MinerProperties(request.Properties))
+
+	return &pb.Empty{}, nil
+}
+
+func (h *Hub) GetSlots(ctx context.Context, request *pb.GetSlotsRequest) (*pb.GetSlotsReply, error) {
+	log.G(h.ctx).Info("handling GetSlots request", zap.Any("req", request))
+
+	miner, exists := h.getMinerByID(request.ID)
+	if !exists {
+		return nil, ErrMinerNotFound
+	}
+
+	result := make([]*pb.Slot, 0)
+	for _, slot := range miner.GetSlots() {
+		result = append(result, slot.Unwrap())
+	}
+
+	return &pb.GetSlotsReply{Slot: result}, nil
+}
+
+func (h *Hub) AddSlot(ctx context.Context, request *pb.AddSlotRequest) (*pb.Empty, error) {
+	log.G(h.ctx).Info("handling AddSlot request", zap.Any("req", request))
+
+	slot, err := structs.NewSlot(request.GetSlot())
+	if err != nil {
+		return nil, err
+	}
+
+	miner, exists := h.getMinerByID(request.ID)
+	if !exists {
+		return nil, ErrMinerNotFound
+	}
+
+	if err := miner.AddSlot(slot); err != nil {
+		return nil, err
+	}
+
+	return &pb.Empty{}, nil
+}
+
+func (h *Hub) RemoveSlot(ctx context.Context, request *pb.RemoveSlotRequest) (*pb.Empty, error) {
+	return nil, ErrUnimplemented
 }
 
 // New returns new Hub
@@ -544,12 +682,24 @@ func New(ctx context.Context, cfg *HubConfig, version string) (*Hub, error) {
 		portPool = gateway.NewPortPool(portRangeFrom, portRangeSize)
 	}
 
-	var consulCli *consul.Client = nil
+	var consulCli Consul
 	if cfg.ConsulEnabled {
 		consulCli, err = consul.NewClient(consul.DefaultConfig())
-		if err != nil {
-			return nil, err
-		}
+	} else {
+		consulCli, err = newDevConsul(ctx)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	eth, err := NewETH()
+	if err != nil {
+		return nil, err
+	}
+
+	market, err := NewMarket()
+	if err != nil {
+		return nil, err
 	}
 
 	h := &Hub{
@@ -566,12 +716,18 @@ func New(ctx context.Context, cfg *HubConfig, version string) (*Hub, error) {
 		ethKey:       ethKey,
 		version:      version,
 
+		locatorEndpoint: cfg.Locator.Address,
+		locatorPeriod:   time.Second * time.Duration(cfg.Locator.Period),
+
 		filters: []minerFilter{
 			exactMatchFilter,
 			resourcesFilter,
 		},
 		consul:         consulCli,
 		associatedHubs: make(map[string]struct{}),
+
+		eth:    eth,
+		market: market,
 	}
 
 	interceptor := h.onRequest
@@ -596,6 +752,12 @@ func (h *Hub) leaderWatch() {
 		if err != nil {
 			break
 		}
+		if kv_pair == nil {
+			time.Sleep(time.Second * 1)
+			log.G(h.ctx).Info("leader key is empty. sleeping for 1 sec")
+			continue
+		}
+		log.G(h.ctx).Info("leader watch: fetched leader", zap.Any("kvpair", kv_pair))
 		log.G(h.ctx).Info("leader watch: fetched leader", zap.String("leader", string(kv_pair.Value)))
 		h.leaderClientLock.Lock()
 		h.leaderClient = nil
@@ -685,7 +847,7 @@ func (h *Hub) election() error {
 		}
 
 		log.G(h.ctx).Info("trying to aquire leader lock")
-		followerCh, err := lock.Lock(h.stopCh)
+		followerCh, err := lock.Lock(nil)
 		if err != nil {
 			log.G(h.ctx).Info("could not acquire leader lock", zap.Error(err))
 			break
@@ -706,17 +868,8 @@ func (h *Hub) election() error {
 	return err
 }
 
-// Serve starts handling incoming API gRPC request and communicates
-// with miners
-func (h *Hub) Serve() error {
-	if h.consul != nil {
-		go h.election()
-	} else {
-		h.isLeader = true
-	}
-
-	h.startTime = time.Now()
-
+// TODO: Decomposed here to be able to easily comment when UDP capturing occurs :)
+func (h *Hub) startDiscovery() error {
 	ip, err := util.GetPublicIP()
 	if err != nil {
 		return err
@@ -732,10 +885,11 @@ func (h *Hub) Serve() error {
 		return err
 	}
 
-	workersEndpt := ip.String() + ":" + workersPort
-	clientEndpt := ip.String() + ":" + clientPort
+	workersEndpoint := ip.String() + ":" + workersPort
+	clientEndpoint := ip.String() + ":" + clientPort
+	h.grpcEndpointAddr = clientEndpoint
 
-	srv, err := frd.NewServer(h.ethKey, workersEndpt, clientEndpt)
+	srv, err := frd.NewServer(h.ethKey, workersEndpoint, clientEndpoint)
 	if err != nil {
 		return err
 	}
@@ -745,8 +899,21 @@ func (h *Hub) Serve() error {
 	}
 	srv.Serve()
 
-	listener, err := net.Listen("tcp", h.endpoint)
+	return nil
+}
 
+// Serve starts handling incoming API gRPC request and communicates
+// with miners
+func (h *Hub) Serve() error {
+	go h.election()
+
+	h.startTime = time.Now()
+
+	if err := h.startDiscovery(); err != nil {
+		return err
+	}
+
+	listener, err := net.Listen("tcp", h.endpoint)
 	if err != nil {
 		log.G(h.ctx).Error("failed to listen", zap.String("address", h.endpoint), zap.Error(err))
 		return err
@@ -781,14 +948,28 @@ func (h *Hub) Serve() error {
 			go h.handleInterconnect(h.ctx, conn)
 		}
 	}()
-	h.wg.Wait()
 
+	// init locator connection and announce
+	// address only on Leader
+	if h.isLeader {
+		err = h.initLocatorClient()
+		if err != nil {
+			return err
+		}
+
+		h.wg.Add(1)
+		go func() {
+			defer h.wg.Done()
+			h.startLocatorAnnouncer()
+		}()
+	}
+
+	h.wg.Wait()
 	return nil
 }
 
 // Close disposes all capabilitiesCurrent attached to the Hub
 func (h *Hub) Close() {
-	h.stopCh <- struct{}{}
 	h.externalGrpc.Stop()
 	h.minerListener.Close()
 	if h.gateway != nil {
@@ -860,4 +1041,51 @@ func (h *Hub) deleteTask(taskID string) error {
 	}
 
 	return nil
+}
+
+func (h *Hub) initLocatorClient() error {
+	conn, err := grpc.Dial(
+		h.locatorEndpoint,
+		grpc.WithInsecure(),
+		grpc.WithTimeout(5*time.Second),
+		grpc.WithDecompressor(grpc.NewGZIPDecompressor()),
+		grpc.WithCompressor(grpc.NewGZIPCompressor()))
+	if err != nil {
+		return err
+	}
+
+	h.locatorClient = pb.NewLocatorClient(conn)
+	return nil
+}
+
+func (h *Hub) startLocatorAnnouncer() {
+	tk := time.NewTicker(h.locatorPeriod)
+	defer tk.Stop()
+
+	h.announceAddress(h.ctx)
+
+	for {
+		select {
+		case <-tk.C:
+			h.announceAddress(h.ctx)
+		case <-h.ctx.Done():
+			return
+		}
+	}
+}
+
+func (h *Hub) announceAddress(ctx context.Context) {
+	req := &pb.AnnounceRequest{
+		EthAddr: util.PubKeyToAddr(h.ethKey.PublicKey),
+		IpAddr:  []string{h.grpcEndpointAddr},
+	}
+
+	log.G(ctx).Info("announcing Hub address",
+		zap.String("eth", req.EthAddr),
+		zap.String("addr", req.IpAddr[0]))
+
+	_, err := h.locatorClient.Announce(ctx, req)
+	if err != nil {
+		log.G(ctx).Warn("cannot announce addresses to Locator", zap.Error(err))
+	}
 }
