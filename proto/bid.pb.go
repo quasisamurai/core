@@ -24,7 +24,6 @@ It has these top-level messages:
 	RAMDevice
 	GPUDevice
 	ListReply
-	HubInfoRequest
 	TaskRequirements
 	HubStartTaskRequest
 	HubStartTaskReply
@@ -33,8 +32,11 @@ It has these top-level messages:
 	GetMinerPropertiesReply
 	SetMinerPropertiesRequest
 	GetSlotsReply
+	GetAllSlotsReply
 	AddSlotRequest
 	RemoveSlotRequest
+	GetRegistredWorkersReply
+	TaskListReply
 	Empty
 	ID
 	PingReply
@@ -63,7 +65,6 @@ It has these top-level messages:
 	TaskInfo
 	MinerStatusMapRequest
 	TaskListRequest
-	TaskListReply
 	Deal
 	DealListRequest
 	DealListReply

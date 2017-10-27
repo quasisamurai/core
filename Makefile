@@ -15,7 +15,7 @@ HUB=sonmhub
 CLI=sonmcli
 LOCATOR=sonmlocator
 MARKET=sonmmarketplace
-
+LOCAL_NODE=sonmnode
 
 TAGS=nocgo
 
@@ -52,6 +52,10 @@ build/cli:
 	@echo "+ $@"
 	${GO} build -tags "$(TAGS)" -ldflags "-s -X github.com/sonm-io/core/cmd/cli/commands.version=$(FULL_VER)" -o ${CLI} ${GOCMD}/cli
 
+build/node:
+	@echo "+ $@"
+	${GO} build -tags "$(TAGS)" -ldflags "-s -X main.version=$(FULL_VER)" -o ${LOCAL_NODE} ${GOCMD}/node
+
 build/cli_win32:
 	@echo "+ $@"
 	GOOS=windows GOARCH=386 go build -tags nocgo -ldflags "-s -X github.com/sonm-io/core/cmd/cli/commands.version=$(FULL_VER).win32" -o ${CLI}_win32.exe ${GOCMD}/cli
@@ -60,11 +64,11 @@ build/blockchain:
 	@echo "+ $@"
 	$(MAKE) -C blockchain build_contract_wrappers
 
-build/insomnia: build/hub build/miner build/cli
+build/insomnia: build/hub build/miner build/cli build/node
 
 build/aux: build/locator build/marketplace
 
-build: build/blockchain build/bootnode build/insomnia build/aux
+build: build/bootnode build/insomnia build/aux
 
 install/bootnode: build/bootnode
 	@echo "+ $@"
@@ -82,6 +86,10 @@ install/cli: build/cli
 	@echo "+ $@"
 	cp ${CLI} ${INSTALLDIR}
 
+install/node: build/node
+	@echo "+ $@"
+	cp ${LOCAL_NODE} ${INSTALLDIR}
+
 install: install/bootnode install/miner install/hub install/cli
 
 vet:
@@ -96,8 +104,6 @@ fmt:
 test: mock
 	@echo "+ $@"
 	${GO} test -tags nocgo $(shell go list ./... | grep -vE 'vendor|blockchain')
-	$(MAKE) -C blockchain test
-
 
 grpc:
 	@echo "+ $@"
@@ -119,14 +125,8 @@ mock:
 	mockgen -package commands -destination cmd/cli/commands/interactor_mock.go  -source cmd/cli/commands/interactor.go
 	mockgen -package task_config -destination cmd/cli/task_config/config_mock.go  -source cmd/cli/task_config/config.go
 
-coverage:
-	${GO} tool cover -func=coverage.txt
-	${GO} tool cover -func=coverage.txt -o funccoverage.txt
-	${GO} tool cover -html=coverage.txt -o coverage.html
-
 clean:
-	rm -f coverage.txt
-	rm -f coverage.html
-	rm -f funccoverage.txt
-	rm -f ${MINER} ${HUB} ${CLI} ${BOOTNODE}
-	#$(MAKE) -C blockchain clean
+	rm -f ${MINER} ${HUB} ${CLI} ${BOOTNODE} ${MARKET}
+
+deb:
+	debuild --no-lintian --preserve-env -uc -us -i -I

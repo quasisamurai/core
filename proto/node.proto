@@ -37,10 +37,6 @@ message TaskListRequest {
     string hubID = 1;
 }
 
-message TaskListReply {
-    repeated TaskInfo task = 1;
-}
-
 // DealManagement describe a bunch of methods
 // to manage deals made into the SONM network
 service DealManagement {
@@ -76,20 +72,27 @@ service HubManagement {
 
     // WorkersList prouces a list of connected Workers
     rpc WorkersList (Empty) returns (ListReply) {}
-    // WorkersStatus produces a detailed info about a Worker by their ID
-    rpc WorkersStatus (HubInfoRequest) returns (InfoReply) {}
+    // WorkersStatus produces a detailed info about a Worker with given ID
+    rpc WorkerStatus (ID) returns (InfoReply) {}
+
+    // GetRegistredWorkers produce a list of Workers IDs allowed
+    // to connect to this hub
+    rpc GetRegistredWorkers(Empty) returns (GetRegistredWorkersReply) {}
+    // RegisterWorkers allows Worker with given ID connect to Hub
+    rpc RegisterWorker (ID) returns (Empty) {}
+    // RegisterWorkers deny Worker with given ID connect to Hub
+    rpc UnregisterWorker (ID) returns (Empty) {}
 
     // GetMinerProperties allows to obtain previously assigned resource
     // properties for a given miner
     rpc GetWorkerProperties(ID) returns (GetMinerPropertiesReply) {}
-
     // SetMinerProperties method allows to specify additional resource
     // properties for a miner specified by its ID
     // Note, that this method overrides all previously specified properties.
     rpc SetWorkerProperties(SetMinerPropertiesRequest) returns (Empty) {}
 
     // GetAskPlans allows to obtain previously assigned Ask Plans from for a given worker.
-    rpc GetAskPlan(ID) returns (GetSlotsReply) {}
+    rpc GetAskPlans(Empty) returns (GetAllSlotsReply) {}
     // CreateAskPlan allows to create rules
     // for creating Ask orders on Marketplace
     rpc CreateAskPlan(AddSlotRequest) returns (Empty) {}

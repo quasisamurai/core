@@ -49,6 +49,7 @@ const leaderKey = "sonm/hub/leader"
 type Hub struct {
 	// TODO (3Hren): Probably port pool should be associated with the gateway implicitly.
 	ctx              context.Context
+	cancel           context.CancelFunc
 	gateway          *gateway.Gateway
 	portPool         *gateway.PortPool
 	grpcEndpoint     string
@@ -169,9 +170,9 @@ func (h *Hub) List(ctx context.Context, request *pb.Empty) (*pb.ListReply, error
 }
 
 // Info returns aggregated runtime statistics for specified miners.
-func (h *Hub) Info(ctx context.Context, request *pb.HubInfoRequest) (*pb.InfoReply, error) {
+func (h *Hub) Info(ctx context.Context, request *pb.ID) (*pb.InfoReply, error) {
 	log.G(h.ctx).Info("handling Info request", zap.Any("req", request))
-	client, ok := h.getMinerByID(request.Miner)
+	client, ok := h.getMinerByID(request.GetId())
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "no such miner")
 	}
@@ -443,6 +444,38 @@ func (h *Hub) StopTask(ctx context.Context, request *pb.ID) (*pb.Empty, error) {
 	return &pb.Empty{}, nil
 }
 
+func (h *Hub) TaskList(ctx context.Context, request *pb.Empty) (*pb.TaskListReply, error) {
+	log.G(h.ctx).Info("handling TaskList request")
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// map workerID to []Task
+	reply := &pb.TaskListReply{Info: map[string]*pb.TaskListReply_TaskInfo{}}
+
+	for workerID, worker := range h.miners {
+		worker.status_mu.Lock()
+		taskStatuses := pb.StatusMapReply{Statuses: worker.status_map}
+		worker.status_mu.Unlock()
+
+		// maps TaskID to TaskStatus
+		info := &pb.TaskListReply_TaskInfo{Tasks: map[string]*pb.TaskStatusReply{}}
+
+		for taskID := range taskStatuses.GetStatuses() {
+			taskInfo, err := worker.Client.TaskDetails(ctx, &pb.ID{Id: taskID})
+			if err != nil {
+				return nil, err
+			}
+
+			info.Tasks[taskID] = taskInfo
+		}
+
+		reply.Info[workerID] = info
+
+	}
+
+	return reply, nil
+}
+
 func (h *Hub) MinerStatus(ctx context.Context, request *pb.ID) (*pb.StatusMapReply, error) {
 	log.G(h.ctx).Info("handling MinerStatus request", zap.Any("req", request))
 
@@ -618,6 +651,28 @@ func (h *Hub) SetMinerProperties(ctx context.Context, request *pb.SetMinerProper
 	return &pb.Empty{}, nil
 }
 
+func (h *Hub) GetAllSlots(ctx context.Context, _ *pb.Empty) (*pb.GetAllSlotsReply, error) {
+	log.G(h.ctx).Info("handling GetAllSlots request")
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	reply := &pb.GetAllSlotsReply{
+		Slots: map[string]*pb.GetAllSlotsReply_SlotList{},
+	}
+
+	for workerID, worker := range h.miners {
+		slots := []*pb.Slot{}
+		workerSlots := worker.GetSlots()
+		for _, s := range workerSlots {
+			slots = append(slots, s.Unwrap())
+		}
+		reply.Slots[workerID] = &pb.GetAllSlotsReply_SlotList{Slot: slots}
+
+	}
+	return reply, nil
+}
+
 func (h *Hub) GetSlots(ctx context.Context, request *pb.ID) (*pb.GetSlotsReply, error) {
 	log.G(h.ctx).Info("handling GetSlots request", zap.Any("req", request))
 
@@ -655,11 +710,52 @@ func (h *Hub) AddSlot(ctx context.Context, request *pb.AddSlotRequest) (*pb.Empt
 }
 
 func (h *Hub) RemoveSlot(ctx context.Context, request *pb.RemoveSlotRequest) (*pb.Empty, error) {
+	log.G(h.ctx).Info("handling RemoveSlot request", zap.Any("req", request))
+	return nil, ErrUnimplemented
+}
+
+// GetRegistredWorkers returns a list of Worker IDs that  allowed to connet to the Hub
+func (h *Hub) GetRegistredWorkers(ctx context.Context, empty *pb.Empty) (*pb.GetRegistredWorkersReply, error) {
+	log.G(h.ctx).Info("handling GetRegistredWorkers request")
+
+	// NOTE: it's a Stub implementation,  always return a list of the connected Workers
+	// todo: implement me
+	reply := &pb.GetRegistredWorkersReply{
+		Ids: []*pb.ID{},
+	}
+
+	h.mu.Lock()
+	for minerID := range h.miners {
+		reply.Ids = append(reply.Ids, &pb.ID{Id: minerID})
+	}
+	h.mu.Unlock()
+
+	return reply, nil
+}
+
+// RegisterWorker allows Worker with given ID to connect to the Hub
+func (h *Hub) RegisterWorker(ctx context.Context, req *pb.ID) (*pb.Empty, error) {
+	// todo: implement me
+	log.G(h.ctx).Info("handling RegisterWorker request", zap.String("id", req.GetId()))
+	return nil, ErrUnimplemented
+}
+
+// UnregisterWorkers deny Worker with given ID to connect to the Hub
+func (h *Hub) UnregisterWorker(ctx context.Context, req *pb.ID) (*pb.Empty, error) {
+	// todo: implement me
+	log.G(h.ctx).Info("handling UnregisterWorker request", zap.String("id", req.GetId()))
 	return nil, ErrUnimplemented
 }
 
 // New returns new Hub
 func New(ctx context.Context, cfg *HubConfig, version string) (*Hub, error) {
+	var err error
+	ctx, cancel := context.WithCancel(ctx)
+	defer func() {
+		if err != nil {
+			cancel()
+		}
+	}()
 	ethKey, err := crypto.HexToECDSA(cfg.Eth.PrivateKey)
 	if err != nil {
 		return nil, errors.Wrap(err, "malformed ethereum private key")
@@ -704,6 +800,7 @@ func New(ctx context.Context, cfg *HubConfig, version string) (*Hub, error) {
 
 	h := &Hub{
 		ctx:          ctx,
+		cancel:       cancel,
 		gateway:      gate,
 		portPool:     portPool,
 		externalGrpc: nil,
@@ -970,6 +1067,7 @@ func (h *Hub) Serve() error {
 
 // Close disposes all capabilitiesCurrent attached to the Hub
 func (h *Hub) Close() {
+	h.cancel()
 	h.externalGrpc.Stop()
 	h.minerListener.Close()
 	if h.gateway != nil {
@@ -1007,7 +1105,7 @@ func (h *Hub) handleInterconnect(ctx context.Context, conn net.Conn) {
 	miner.Close()
 
 	h.mu.Lock()
-	delete(h.miners, conn.RemoteAddr().String())
+	delete(h.miners, miner.ID())
 	h.mu.Unlock()
 }
 
