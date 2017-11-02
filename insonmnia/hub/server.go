@@ -29,6 +29,7 @@ import (
 	consul "github.com/hashicorp/consul/api"
 	frd "github.com/sonm-io/core/fusrodah/hub"
 	"github.com/sonm-io/core/insonmnia/gateway"
+	"github.com/sonm-io/core/insonmnia/hardware/gpu"
 	"github.com/sonm-io/core/insonmnia/resource"
 	"github.com/sonm-io/core/insonmnia/structs"
 	pb "github.com/sonm-io/core/proto"
@@ -38,6 +39,7 @@ import (
 var (
 	ErrInvalidOrderType = status.Errorf(codes.InvalidArgument, "invalid order type")
 	ErrAskNotFound      = status.Errorf(codes.NotFound, "ask not found")
+	ErrDeviceNotFound   = status.Errorf(codes.NotFound, "device not found")
 	ErrMinerNotFound    = status.Errorf(codes.NotFound, "miner not found")
 	ErrUnimplemented    = status.Errorf(codes.Unimplemented, "not implemented yet")
 )
@@ -91,7 +93,15 @@ type Hub struct {
 
 	eth    ETH
 	market Market
+
+	deviceProperties map[string]DeviceProperties
+
+	// Scheduling.
+
+	slots []*structs.Slot
 }
+
+type DeviceProperties map[string]float64
 
 // Ping should be used as Healthcheck for Hub
 func (h *Hub) Ping(ctx context.Context, _ *pb.Empty) (*pb.PingReply, error) {
@@ -393,14 +403,15 @@ func (h *Hub) StartTask(ctx context.Context, request *pb.HubStartTaskRequest) (*
 
 	//h.setMinerTaskID(miner.ID(), taskID)
 
-	resources := request.GetRequirements().GetResources()
-	cpuCount := resources.GetCPUCores()
-	memoryCount := resources.GetMaxMemory()
+	// TODO: We no longer consume resources here. Instead allocation/usage checking required.
+	//resources := request.GetRequirements().GetResources()
+	//cpuCount := resources.GetCPUCores()
+	//memoryCount := resources.GetMaxMemory()
 
-	var usage = resource.NewResources(int(cpuCount), int64(memoryCount))
-	if err := miner.Consume(taskID, &usage); err != nil {
-		return nil, err
-	}
+	//var usage = resource.NewResources(int(cpuCount), int64(memoryCount))
+	//if err := miner.Consume(taskID, &usage); err != nil {
+	//	return nil, err
+	//}
 
 	var reply = pb.HubStartTaskReply{
 		Id: taskID,
@@ -437,7 +448,6 @@ func (h *Hub) StopTask(ctx context.Context, request *pb.ID) (*pb.Empty, error) {
 	}
 
 	miner.deregisterRoute(taskID)
-	miner.Retain(taskID)
 
 	h.deleteTask(taskID)
 
@@ -542,8 +552,13 @@ func (h *Hub) TaskLogs(request *pb.TaskLogsRequest, server pb.Hub_TaskLogsServer
 	}
 }
 
-func (h *Hub) ProposeDeal(ctx context.Context, request *pb.DealRequest) (*pb.Empty, error) {
-	log.G(h.ctx).Info("handling ProposeDeal request", zap.Any("req", request))
+func (h *Hub) ProposeDeal(ctx context.Context, r *pb.DealRequest) (*pb.Empty, error) {
+	log.G(h.ctx).Info("handling ProposeDeal request", zap.Any("request", r))
+
+	request, err := structs.NewDealRequest(r)
+	if err != nil {
+		return nil, err
+	}
 
 	order, err := structs.NewOrder(request.GetOrder())
 	if err != nil {
@@ -559,64 +574,44 @@ func (h *Hub) ProposeDeal(ctx context.Context, request *pb.DealRequest) (*pb.Emp
 	if !exists {
 		return nil, ErrAskNotFound
 	}
-	miner, err := h.getMinerByOrder(order)
+	resources, err := structs.NewResources(request.GetOrder().GetSlot().GetResources())
 	if err != nil {
 		return nil, err
 	}
-	if err := h.eth.CreatePendingDeal(order); err != nil {
+	usage := resource.NewResources(int(resources.GetCpuCores()), int64(resources.GetMemoryInBytes()))
+	miner, err := h.findRandomMinerByUsage(&usage)
+	if err != nil {
+		return nil, err
+	}
+	if err := miner.Consume(OrderId(request.GetBidId()), &usage); err != nil {
 		return nil, err
 	}
 
-	if err := miner.ReserveSlot(order.GetSlot()); err != nil {
-		h.eth.RevokePendingDeal(order)
-		return nil, err
-	}
+	// TODO: Listen for ETH.
+	// TODO: Start timeout for ETH approve deal.
 
 	return &pb.Empty{}, nil
 }
 
-func (h *Hub) ApproveDeal(ctx context.Context, request *pb.DealRequest) (*pb.Empty, error) {
-	// ApproveDeal.
-	// 1. Move from pending to reserved.
-	// 2. Notify man who put this ask.
-	return &pb.Empty{}, ErrUnimplemented
-}
-
-func (h *Hub) getMinerByOrder(order *structs.Order) (*MinerCtx, error) {
+func (h *Hub) findRandomMinerByUsage(usage *resource.Resources) (*MinerCtx, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-
-	for id, miner := range h.miners {
-		log.G(h.ctx).Debug("checking a miner for order", zap.String("miner", id))
-		// TODO (3Hren): What if more than one miner has the same slot? Are they equal?
-		if miner.HasSlot(order.GetSlot()) {
-			return miner, nil
-		}
-	}
-
-	return nil, ErrMinerNotFound
-}
-
-func (h *Hub) findRandomMinerBySlot(slot *structs.Slot) (*MinerCtx, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	if len(h.miners) == 0 {
-		return nil, ErrMinerNotFound
-	}
 
 	rg := rand.New(rand.NewSource(time.Now().UnixNano()))
-
 	id := 0
 	var result *MinerCtx = nil
 	for _, miner := range h.miners {
-		if miner.HasSlot(slot) {
+		if err := miner.PollConsume(usage); err != nil {
 			id++
 			threshold := 1.0 / float64(id)
 			if rg.Float64() < threshold {
 				result = miner
 			}
 		}
+	}
+
+	if result == nil {
+		return nil, ErrMinerNotFound
 	}
 
 	return result, nil
@@ -627,100 +622,138 @@ func (h *Hub) DiscoverHub(ctx context.Context, request *pb.DiscoverHubRequest) (
 	return &pb.Empty{}, nil
 }
 
-func (h *Hub) GetMinerProperties(ctx context.Context, request *pb.ID) (*pb.GetMinerPropertiesReply, error) {
+func (h *Hub) Devices(ctx context.Context, request *pb.Empty) (*pb.DevicesReply, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// Templates in go? Nevermind, just copy/paste.
+
+	CPUs := map[string]*pb.CPUDeviceInfo{}
+	for id, miner := range h.miners {
+		for _, cpu := range miner.capabilities.CPU {
+			hash := hex.EncodeToString(cpu.Hash())
+			info, exists := CPUs[hash]
+			if exists {
+				info.Miners = append(info.Miners, id)
+			} else {
+				CPUs[hash] = &pb.CPUDeviceInfo{
+					Miners: []string{id},
+					Device: cpu.Marshal(),
+				}
+			}
+		}
+	}
+
+	GPUs := map[string]*pb.GPUDeviceInfo{}
+	for id, miner := range h.miners {
+		for _, dev := range miner.capabilities.GPU {
+			hash := hex.EncodeToString(dev.Hash())
+			info, exists := GPUs[hash]
+			if exists {
+				info.Miners = append(info.Miners, id)
+			} else {
+				GPUs[hash] = &pb.GPUDeviceInfo{
+					Miners: []string{id},
+					Device: gpu.Marshal(dev),
+				}
+			}
+		}
+	}
+
+	reply := &pb.DevicesReply{
+		CPUs: CPUs,
+		GPUs: GPUs,
+	}
+
+	return reply, nil
+}
+
+func (h *Hub) GetDeviceProperties(ctx context.Context, request *pb.ID) (*pb.GetDevicePropertiesReply, error) {
 	log.G(h.ctx).Info("handling GetMinerProperties request", zap.Any("req", request))
-
-	miner, exists := h.getMinerByID(request.Id)
-	if !exists {
-		return nil, ErrMinerNotFound
-	}
-
-	return &pb.GetMinerPropertiesReply{Properties: miner.MinerProperties()}, nil
-}
-
-func (h *Hub) SetMinerProperties(ctx context.Context, request *pb.SetMinerPropertiesRequest) (*pb.Empty, error) {
-	log.G(h.ctx).Info("handling SetMinerProperties request", zap.Any("req", request))
-
-	miner, exists := h.getMinerByID(request.ID)
-	if !exists {
-		return nil, ErrMinerNotFound
-	}
-
-	miner.SetMinerProperties(MinerProperties(request.Properties))
-
-	return &pb.Empty{}, nil
-}
-
-func (h *Hub) GetAllSlots(ctx context.Context, _ *pb.Empty) (*pb.GetAllSlotsReply, error) {
-	log.G(h.ctx).Info("handling GetAllSlots request")
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	reply := &pb.GetAllSlotsReply{
-		Slots: map[string]*pb.GetAllSlotsReply_SlotList{},
-	}
-
-	for workerID, worker := range h.miners {
-		slots := []*pb.Slot{}
-		workerSlots := worker.GetSlots()
-		for _, s := range workerSlots {
-			slots = append(slots, s.Unwrap())
-		}
-		reply.Slots[workerID] = &pb.GetAllSlotsReply_SlotList{Slot: slots}
-
-	}
-	return reply, nil
-}
-
-func (h *Hub) GetSlots(ctx context.Context, request *pb.ID) (*pb.GetSlotsReply, error) {
-	log.G(h.ctx).Info("handling GetSlots request", zap.Any("req", request))
-
-	miner, exists := h.getMinerByID(request.Id)
+	properties, exists := h.deviceProperties[request.Id]
 	if !exists {
-		return nil, ErrMinerNotFound
+		return nil, ErrDeviceNotFound
 	}
 
-	result := make([]*pb.Slot, 0)
-	for _, slot := range miner.GetSlots() {
-		result = append(result, slot.Unwrap())
-	}
-
-	return &pb.GetSlotsReply{Slot: result}, nil
+	return &pb.GetDevicePropertiesReply{Properties: properties}, nil
 }
 
-func (h *Hub) AddSlot(ctx context.Context, request *pb.AddSlotRequest) (*pb.Empty, error) {
-	log.G(h.ctx).Info("handling AddSlot request", zap.Any("req", request))
+func (h *Hub) SetDeviceProperties(ctx context.Context, request *pb.SetDevicePropertiesRequest) (*pb.Empty, error) {
+	log.G(h.ctx).Info("handling SetDeviceProperties request", zap.Any("req", request))
 
-	slot, err := structs.NewSlot(request.GetSlot())
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.deviceProperties[request.ID] = DeviceProperties(request.Properties)
+
+	return &pb.Empty{}, nil
+}
+
+func (h *Hub) Slots(ctx context.Context, request *pb.Empty) (*pb.SlotsReply, error) {
+	log.G(h.ctx).Info("handling Slots request", zap.Any("request", request))
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	slots := make([]*pb.Slot, 0, len(h.slots))
+	for _, slot := range h.slots {
+		slots = append(slots, slot.Unwrap())
+	}
+
+	return &pb.SlotsReply{Slot: slots}, nil
+}
+
+func (h *Hub) InsertSlot(ctx context.Context, request *pb.Slot) (*pb.Empty, error) {
+	log.G(h.ctx).Info("handling InsertSlot request", zap.Any("request", request))
+
+	// We do not perform any resource existence check here, because miners
+	// can be added dynamically.
+	slot, err := structs.NewSlot(request)
 	if err != nil {
 		return nil, err
 	}
 
-	miner, exists := h.getMinerByID(request.ID)
-	if !exists {
-		return nil, ErrMinerNotFound
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// TODO: Check that such slot already exists.
+	h.slots = append(h.slots, slot)
+
+	return &pb.Empty{}, nil
+}
+
+func (h *Hub) RemoveSlot(ctx context.Context, request *pb.Slot) (*pb.Empty, error) {
+	log.G(h.ctx).Info("RemoveSlot request", zap.Any("request", request))
+
+	slot, err := structs.NewSlot(request)
+	if err != nil {
+		return nil, err
 	}
 
-	if err := miner.AddSlot(slot); err != nil {
-		return nil, err
+	filtered := []*structs.Slot{}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for _, s := range h.slots {
+		if !s.Eq(slot) {
+			filtered = append(filtered, s)
+		}
 	}
 
 	return &pb.Empty{}, nil
 }
 
-func (h *Hub) RemoveSlot(ctx context.Context, request *pb.RemoveSlotRequest) (*pb.Empty, error) {
-	log.G(h.ctx).Info("handling RemoveSlot request", zap.Any("req", request))
-	return nil, ErrUnimplemented
-}
-
-// GetRegistredWorkers returns a list of Worker IDs that  allowed to connet to the Hub
-func (h *Hub) GetRegistredWorkers(ctx context.Context, empty *pb.Empty) (*pb.GetRegistredWorkersReply, error) {
-	log.G(h.ctx).Info("handling GetRegistredWorkers request")
+// GetRegisteredWorkers returns a list of Worker IDs that  allowed to connect
+// to the Hub.
+func (h *Hub) GetRegisteredWorkers(ctx context.Context, empty *pb.Empty) (*pb.GetRegisteredWorkersReply, error) {
+	log.G(h.ctx).Info("handling GetRegisteredWorkers request")
 
 	// NOTE: it's a Stub implementation,  always return a list of the connected Workers
 	// todo: implement me
-	reply := &pb.GetRegistredWorkersReply{
+	reply := &pb.GetRegisteredWorkersReply{
 		Ids: []*pb.ID{},
 	}
 
@@ -734,16 +767,16 @@ func (h *Hub) GetRegistredWorkers(ctx context.Context, empty *pb.Empty) (*pb.Get
 }
 
 // RegisterWorker allows Worker with given ID to connect to the Hub
-func (h *Hub) RegisterWorker(ctx context.Context, req *pb.ID) (*pb.Empty, error) {
+func (h *Hub) RegisterWorker(ctx context.Context, request *pb.ID) (*pb.Empty, error) {
 	// todo: implement me
-	log.G(h.ctx).Info("handling RegisterWorker request", zap.String("id", req.GetId()))
+	log.G(h.ctx).Info("handling RegisterWorker request", zap.String("id", request.GetId()))
 	return nil, ErrUnimplemented
 }
 
-// UnregisterWorkers deny Worker with given ID to connect to the Hub
-func (h *Hub) UnregisterWorker(ctx context.Context, req *pb.ID) (*pb.Empty, error) {
+// DeregisterWorkers deny Worker with given ID to connect to the Hub
+func (h *Hub) DeregisterWorker(ctx context.Context, request *pb.ID) (*pb.Empty, error) {
 	// todo: implement me
-	log.G(h.ctx).Info("handling UnregisterWorker request", zap.String("id", req.GetId()))
+	log.G(h.ctx).Info("handling DeregisterWorker request", zap.String("id", request.GetId()))
 	return nil, ErrUnimplemented
 }
 
@@ -805,7 +838,6 @@ func New(ctx context.Context, cfg *HubConfig, version string) (*Hub, error) {
 		portPool:     portPool,
 		externalGrpc: nil,
 
-		//tasks:  make(map[string]string),
 		miners: make(map[string]*MinerCtx),
 
 		grpcEndpoint: cfg.Monitoring.Endpoint,
@@ -825,6 +857,8 @@ func New(ctx context.Context, cfg *HubConfig, version string) (*Hub, error) {
 
 		eth:    eth,
 		market: market,
+
+		deviceProperties: make(map[string]DeviceProperties),
 	}
 
 	interceptor := h.onRequest
@@ -1065,7 +1099,7 @@ func (h *Hub) Serve() error {
 	return nil
 }
 
-// Close disposes all capabilitiesCurrent attached to the Hub
+// Close disposes all resources attached to the Hub
 func (h *Hub) Close() {
 	h.cancel()
 	h.externalGrpc.Stop()

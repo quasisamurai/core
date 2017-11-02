@@ -1,6 +1,7 @@
 syntax = "proto3";
 
 import "bid.proto";
+import "capabilities.proto";
 import "insonmnia.proto";
 
 package sonm;
@@ -27,38 +28,42 @@ service Hub {
     rpc ProposeDeal(DealRequest) returns (Empty) {}
     rpc DiscoverHub(DiscoverHubRequest) returns (Empty) {}
 
-    // GetMinerProperties allows to obtain previously assigned resource
-    // properties for a given miner.
-    rpc GetMinerProperties(ID) returns (GetMinerPropertiesReply) {}
+    // Device configuration API.
 
-    // SetMinerProperties method allows to specify additional resource
-    // properties for a miner specified by its ID.
+    // Devices returns list of all available devices that this Hub awares of
+    // with tieir full description.
+    rpc Devices(Empty) returns (DevicesReply) {}
+    // GetDeviceProperties allows to obtain previously assigned resource
+    // properties for a given device.
+    // TODO: Just string?
+    rpc GetDeviceProperties(ID) returns (GetDevicePropertiesReply) {}
+    // SetDeviceProperties method allows to specify additional resource
+    // properties for a device specified by its ID.
     // This may include GPU's capability to execute a well-known work such as
     // Ethereum mining etc.
     // Note, that this method overrides all previously specified properties.
-    rpc SetMinerProperties(SetMinerPropertiesRequest) returns (Empty) {}
+    rpc SetDeviceProperties(SetDevicePropertiesRequest) returns (Empty) {}
 
-    // GetSlots allows to obtain previously assigned slots from for a given
-    // miner.
-    rpc GetSlots(ID) returns (GetSlotsReply) {}
-    // GetAllSlots returns slots assigned on all Workers on the Hub
-    rpc GetAllSlots(Empty) returns (GetAllSlotsReply) {}
-    // AddSlot allows to assign a new slot for a given miner.
-    // This method can fail if either there are no resources left on a miner
-    // or it has been previourly assigned for specified time duration.
-    rpc AddSlot(AddSlotRequest) returns (Empty) {}
-    // RemoveSlot removes the speified slot if fully matches.
-    rpc RemoveSlot(RemoveSlotRequest) returns (Empty) {}
-
-    // GetRegistredWorkers returns a list of Worker IDs that
+    // GetRegisteredWorkers returns a list of Worker IDs that
     // allowed to connet to the Hub
-    rpc GetRegistredWorkers(Empty) returns (GetRegistredWorkersReply) {}
-    // RegisterWorker allows Worker with given ID
-    // to connect to the Hub
+    rpc GetRegisteredWorkers(Empty) returns (GetRegisteredWorkersReply) {}
+    // RegisterWorker adds Worker credentials to be able for them to connect
+    // to a Hub.
     rpc RegisterWorker(ID) returns (Empty) {}
-    // RegisterWorkers deny Worker with given ID
-    // to connect to the Hub
-    rpc UnregisterWorker(ID) returns (Empty) {}
+    // DeregisterWorkers removed Worker credentials denying them to connect to
+    // a Hub.
+    rpc DeregisterWorker(ID) returns (Empty) {}
+
+    // Slot management.
+
+    // GetSlots allows to obtain previously assigned slots for the Hub.
+    rpc Slots(Empty) returns (SlotsReply) {}
+    // AddSlot allows to assign a new slot.
+    // This method can fail if either there are no such resources found or it
+    // has been previourly assigned.
+    rpc InsertSlot(Slot) returns (Empty) {}
+    // RemoveSlot removes the speified slot if fully matches.
+    rpc RemoveSlot(Slot) returns (Empty) {}
 }
 
 message ListReply {
@@ -100,19 +105,23 @@ message HubStatusReply {
 }
 
 message DealRequest {
-    Order order = 1;
+    string bidId = 1;
+    string askId = 2;
+    Order order = 3;
 }
 
-message GetMinerPropertiesReply {
-    map<string, string> properties = 1;
+message GetDevicePropertiesReply {
+    map<string, double> properties = 1;
 }
 
-message SetMinerPropertiesRequest {
+message SetDevicePropertiesRequest {
+    // Device identifier.
     string ID = 1;
-    map<string, string> properties = 2;
+    // Its properties.
+    map<string, double> properties = 2;
 }
 
-message GetSlotsReply {
+message SlotsReply {
     repeated Slot slot = 1;
 }
 
@@ -135,13 +144,34 @@ message RemoveSlotRequest {
     Slot slot = 2;
 }
 
-message GetRegistredWorkersReply {
+message GetRegisteredWorkersReply {
     repeated ID ids = 1;
 }
 
 message TaskListReply {
     message TaskInfo {
-        map <string, TaskStatusReply> tasks = 1;
+        map<string, TaskStatusReply> tasks = 1;
     }
     map<string, TaskInfo> info = 1;
+}
+
+message CPUDeviceInfo {
+    // Miners where such device exists.
+    repeated string miners = 1;
+    // Its properties.
+    CPUDevice device = 2;
+}
+
+message GPUDeviceInfo {
+    // Miners where such device exists.
+    repeated string miners = 1;
+    // Its properties.
+    GPUDevice device = 2;
+}
+
+message DevicesReply {
+    // CPU unique ID -> Info.
+    map<string, CPUDeviceInfo> CPUs = 1;
+    // GPU unique ID -> Info.
+    map<string, GPUDeviceInfo> GPUs = 2;
 }

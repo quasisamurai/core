@@ -19,7 +19,7 @@ package gpu
 import "C"
 
 import (
-	"github.com/pkg/errors"
+	"fmt"
 	"unsafe"
 )
 
@@ -40,11 +40,27 @@ func GetGPUDevicesUsingOpenCL() ([]Device, error) {
 	for _, platform := range platforms {
 		devices, err := platform.getGPUDevices()
 		if err != nil {
-			continue
+			return nil, err
 		}
 
 		for _, d := range devices {
 			options := []Option{}
+			name, err := d.name()
+			if err != nil {
+				return nil, err
+			}
+			vendor, err := d.vendor()
+			if err != nil {
+				return nil, err
+			}
+			maxClockFrequency, err := d.deviceMaxClockFrequency()
+			if err != nil {
+				return nil, err
+			}
+			globalMemSize, err := d.globalMemSize()
+			if err != nil {
+				return nil, err
+			}
 			if vendorId, err := d.vendorId(); err == nil {
 				options = append(options, WithVendorId(vendorId))
 			}
@@ -52,7 +68,7 @@ func GetGPUDevicesUsingOpenCL() ([]Device, error) {
 				options = append(options, WithOpenClDeviceVersion(deviceVersion))
 			}
 
-			device, err := NewDevice(d.name(), d.vendor(), d.globalMemSize(), options...)
+			device, err := NewDevice(name, vendor, uint64(maxClockFrequency), globalMemSize, options...)
 			if err != nil {
 				return nil, err
 			}
@@ -72,7 +88,7 @@ func getPlatforms() ([]*platform, error) {
 	var num C.cl_uint
 
 	if err := C.clGetPlatformIDs(C.cl_uint(maxPlatforms), &ids[0], &num); err != C.CL_SUCCESS {
-		return nil, errors.Errorf("failed to obtain OpenCL platforms: %s", err)
+		return nil, fmt.Errorf("failed to obtain OpenCL platforms: %s", err)
 	}
 
 	platforms := make([]*platform, num)
@@ -92,7 +108,7 @@ func (p *platform) getGPUDevices() ([]*clDevice, error) {
 	}
 
 	if err := C.clGetDeviceIDs(p.id, C.cl_device_type(C.CL_DEVICE_TYPE_GPU), C.cl_uint(maxDeviceCount), &ids[0], &num); err != C.CL_SUCCESS {
-		return nil, errors.Errorf("failed to obtain GPU devices for a platform: %s", err)
+		return nil, fmt.Errorf("failed to obtain GPU devices for a platform: %s", err)
 	}
 
 	devices := make([]*clDevice, num)
@@ -112,7 +128,7 @@ func (d *clDevice) getInfoString(param C.cl_device_info) (string, error) {
 	var size C.size_t
 
 	if err := C.clGetDeviceInfo(d.id, param, 1024, unsafe.Pointer(&data), &size); err != C.CL_SUCCESS {
-		return "", errors.Errorf("failed to convert device info into a string: %s", err)
+		return "", fmt.Errorf("failed to convert device info into a string: %s", err)
 	}
 
 	return C.GoStringN((*C.char)(unsafe.Pointer(&data)), C.int(size)-1), nil
@@ -122,7 +138,7 @@ func (d *clDevice) getInfoUint(param C.cl_device_info) (uint, error) {
 	var val C.cl_uint
 
 	if err := C.clGetDeviceInfo(d.id, param, C.size_t(unsafe.Sizeof(val)), unsafe.Pointer(&val), nil); err != C.CL_SUCCESS {
-		return 0, errors.Errorf("failed to convert device info into an integer: %s", err)
+		return 0, fmt.Errorf("failed to convert device info into an integer: %s", err)
 	}
 
 	return uint(val), nil
@@ -132,29 +148,26 @@ func (d *clDevice) getInfoUint64(param C.cl_device_info) (uint64, error) {
 	var val C.cl_ulong
 
 	if err := C.clGetDeviceInfo(d.id, param, C.size_t(unsafe.Sizeof(val)), unsafe.Pointer(&val), nil); err != C.CL_SUCCESS {
-		return 0, errors.Errorf("failed to convert device info into an integer: %s", err)
+		return 0, fmt.Errorf("failed to convert device info into an integer: %s", err)
 	}
 
 	return uint64(val), nil
 }
 
-func (d *clDevice) name() string {
-	result, _ := d.getInfoString(C.CL_DEVICE_NAME)
-	return result
+func (d *clDevice) name() (string, error) {
+	return d.getInfoString(C.CL_DEVICE_NAME)
 }
 
-func (d *clDevice) vendor() string {
-	result, _ := d.getInfoString(C.CL_DEVICE_VENDOR)
-	return result
+func (d *clDevice) vendor() (string, error) {
+	return d.getInfoString(C.CL_DEVICE_VENDOR)
 }
 
 func (d *clDevice) vendorId() (uint, error) {
 	return d.getInfoUint(C.CL_DEVICE_VENDOR_ID)
 }
 
-func (d *clDevice) globalMemSize() uint64 {
-	val, _ := d.getInfoUint64(C.CL_DEVICE_GLOBAL_MEM_SIZE)
-	return uint64(val)
+func (d *clDevice) globalMemSize() (uint64, error) {
+	return d.getInfoUint64(C.CL_DEVICE_GLOBAL_MEM_SIZE)
 }
 
 func (d *clDevice) driverVersion() (string, error) {
@@ -163,4 +176,12 @@ func (d *clDevice) driverVersion() (string, error) {
 
 func (d *clDevice) deviceVersion() (string, error) {
 	return d.getInfoString(C.CL_DEVICE_VERSION)
+}
+
+func (d *clDevice) deviceMaxClockFrequency() (uint, error) {
+	return d.getInfoUint(C.CL_DEVICE_MAX_CLOCK_FREQUENCY)
+}
+
+func (d *clDevice) deviceMaxComputeUnits() (uint, error) {
+	return d.getInfoUint(C.CL_DEVICE_MAX_COMPUTE_UNITS)
 }

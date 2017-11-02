@@ -48,30 +48,11 @@ func validateSlot(s *pb.Slot) error {
 		return err
 	}
 
-	if s.GetStartTime() == nil {
-		return errStartTimeRequired
-	}
-
-	if s.GetEndTime() == nil {
-		return errEndTimeRequired
-	}
-
-	if s.GetStartTime().GetSeconds() >= s.GetEndTime().GetSeconds() {
-		return errStartTimeAfterEnd
-	}
-
 	return nil
 }
 
 func (s *Slot) compareSupplierRating(two *Slot) bool {
 	return two.inner.GetSupplierRating() >= s.inner.GetSupplierRating()
-}
-
-func (s *Slot) compareTime(two *Slot) bool {
-	startOK := s.inner.GetStartTime().GetSeconds() >= two.inner.GetStartTime().GetSeconds()
-	endOK := s.inner.GetEndTime().GetSeconds() <= two.inner.GetEndTime().GetSeconds()
-
-	return startOK && endOK
 }
 
 func (s *Slot) compareCpuCoresBid(two *Slot) bool {
@@ -111,7 +92,7 @@ func (s *Slot) compareRamBytesAsk(two *Slot) bool {
 }
 
 func (s *Slot) compareGpuCountAsk(two *Slot) bool {
-	return two.inner.GetResources().GetGpuCount() <= s.inner.GetResources().GetGpuCount()
+	return two.inner.GetResources().GetGpuCount() == s.inner.GetResources().GetGpuCount()
 }
 
 func (s *Slot) compareStorageAsk(two *Slot) bool {
@@ -131,10 +112,11 @@ func (s *Slot) compareNetworkTypeAsk(two *Slot) bool {
 }
 
 func (s *Slot) Compare(two *Slot, orderType pb.OrderType) bool {
-	// comparison of rating and time are performing
+	// comparison of rating is performing
 	// at the same way for different types of orders
-	rt := s.compareSupplierRating(two) && s.compareTime(two)
+	rt := s.compareSupplierRating(two)
 
+	// TODO: Seems equal.
 	if orderType == pb.OrderType_BID {
 		return rt &&
 			s.compareCpuCoresBid(two) &&
@@ -156,4 +138,14 @@ func (s *Slot) Compare(two *Slot, orderType pb.OrderType) bool {
 	}
 
 	return false
+}
+
+func (s *Slot) Eq(other *Slot) bool {
+	return s.compareCpuCoresBid(other) &&
+		s.compareRamBytesBid(other) &&
+		s.compareGpuCountBid(other) &&
+		s.compareStorageBid(other) &&
+		s.compareNetTrafficInBid(other) &&
+		s.compareNetTrafficOutBid(other) &&
+		s.compareNetworkTypeBid(other)
 }

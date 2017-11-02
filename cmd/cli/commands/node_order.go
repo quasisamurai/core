@@ -25,35 +25,26 @@ var nodeOrderRootCmd = &cobra.Command{
 	Short: "Operations with ask order plan",
 }
 
-func printAskList(cmd *cobra.Command, slots *pb.GetAllSlotsReply) {
+func printAskList(cmd *cobra.Command, slots *pb.SlotsReply) {
 	if isSimpleFormat() {
-		slots := slots.GetSlots()
+		slots := slots.GetSlot()
 		if len(slots) == 0 {
 			cmd.Printf("No Ask Order configured\r\n")
 			return
 		}
 
-		for workerID, workerSlots := range slots {
-			if len(workerSlots.Slot) == 0 {
-				//
-				cmd.Printf("Worker \"%s\" has no slots\r\n", workerID)
-				continue
-			}
+		for _, slot := range slots {
+			cmd.Printf(" CPU: %d Cores\r\n", slot.Resources.CpuCores)
+			cmd.Printf(" GPU: %d Devices\r\n", slot.Resources.GpuCount)
+			cmd.Printf(" RAM: %s\r\n", ds.ByteSize(slot.Resources.RamBytes).HR())
+			cmd.Printf(" Net: %s\r\n", slot.Resources.NetworkType.String())
+			cmd.Printf("     %s IN\r\n", ds.ByteSize(slot.Resources.NetTrafficIn).HR())
+			cmd.Printf("     %s OUT\r\n", ds.ByteSize(slot.Resources.NetTrafficOut).HR())
 
-			cmd.Printf("Slots on Worker \"%s\":\r\n", workerID)
-			for _, slot := range workerSlots.Slot {
-				cmd.Printf(" CPU: %d Cores\r\n", slot.Resources.CpuCores)
-				cmd.Printf(" GPU: %d Devices\r\n", slot.Resources.GpuCount)
-				cmd.Printf(" RAM: %s\r\n", ds.ByteSize(slot.Resources.RamBytes).HR())
-				cmd.Printf(" Net: %s\r\n", slot.Resources.NetworkType.String())
-				cmd.Printf("     %s IN\r\n", ds.ByteSize(slot.Resources.NetTrafficIn).HR())
-				cmd.Printf("     %s OUT\r\n", ds.ByteSize(slot.Resources.NetTrafficOut).HR())
-
-				if slot.Geo != nil && slot.Geo.City != "" && slot.Geo.Country != "" {
-					cmd.Printf(" Geo: %s, %s\r\n", slot.Geo.City, slot.Geo.Country)
-				}
-				cmd.Println("")
+			if slot.Geo != nil && slot.Geo.City != "" && slot.Geo.Country != "" {
+				cmd.Printf(" Geo: %s, %s\r\n", slot.Geo.City, slot.Geo.Country)
 			}
+			cmd.Println("")
 		}
 	} else {
 		b, _ := json.Marshal(slots)
@@ -82,9 +73,9 @@ var nodeOrderListCmd = &cobra.Command{
 }
 
 var nodeOrderCreateCmd = &cobra.Command{
-	Use:   "create <worker_id> <plan.yaml>",
+	Use:   "create <plan.yaml>",
 	Short: "Create new plan",
-	Args:  cobra.MinimumNArgs(2),
+	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		hub, err := NewHubInteractor(nodeAddress, timeout)
 		if err != nil {
@@ -92,7 +83,6 @@ var nodeOrderCreateCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		workerID := args[0]
 		planPath := args[1]
 
 		slot, err := loadSlotFile(planPath)
@@ -101,7 +91,7 @@ var nodeOrderCreateCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		_, err = hub.CreateAskPlan(workerID, slot)
+		_, err = hub.CreateAskPlan(slot)
 		if err != nil {
 			showError(cmd, "Cannot create new AskOrder", err)
 			os.Exit(1)
@@ -121,6 +111,8 @@ var nodeOrderRemoveCmd = &cobra.Command{
 			showError(cmd, "Cannot connect to Node", err)
 			os.Exit(1)
 		}
+
+		// TODO(sshaman1101): implement this
 
 		// NOTE: method is not implemented in Hub yet
 		//planID := args[0]
@@ -164,8 +156,8 @@ func loadSlotFile(path string) (*structs.Slot, error) {
 	return slot, nil
 }
 
-func loadPropsFile(path string) (map[string]string, error) {
-	props := map[string]string{}
+func loadPropsFile(path string) (map[string]float64, error) {
+	props := map[string]float64{}
 	err := util.LoadYamlFile(path, &props)
 	if err != nil {
 		return nil, err

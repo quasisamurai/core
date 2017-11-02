@@ -526,28 +526,32 @@ type HubManagementClient interface {
 	WorkersList(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*ListReply, error)
 	// WorkersStatus produces a detailed info about a Worker with given ID
 	WorkerStatus(ctx context.Context, in *ID, opts ...grpc.CallOption) (*InfoReply, error)
-	// GetRegistredWorkers produce a list of Workers IDs allowed
+	// GetRegisteredWorkers produce a list of Workers IDs allowed
 	// to connect to this hub
-	GetRegistredWorkers(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetRegistredWorkersReply, error)
+	GetRegisteredWorkers(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetRegisteredWorkersReply, error)
 	// RegisterWorkers allows Worker with given ID connect to Hub
 	RegisterWorker(ctx context.Context, in *ID, opts ...grpc.CallOption) (*Empty, error)
-	// RegisterWorkers deny Worker with given ID connect to Hub
-	UnregisterWorker(ctx context.Context, in *ID, opts ...grpc.CallOption) (*Empty, error)
-	// GetMinerProperties allows to obtain previously assigned resource
-	// properties for a given miner
-	GetWorkerProperties(ctx context.Context, in *ID, opts ...grpc.CallOption) (*GetMinerPropertiesReply, error)
-	// SetMinerProperties method allows to specify additional resource
-	// properties for a miner specified by its ID
-	// Note, that this method overrides all previously specified properties.
-	SetWorkerProperties(ctx context.Context, in *SetMinerPropertiesRequest, opts ...grpc.CallOption) (*Empty, error)
+	// DeregisterWorkers deny Worker with given ID connect to Hub
+	DeregisterWorker(ctx context.Context, in *ID, opts ...grpc.CallOption) (*Empty, error)
+	// Devices returns list of all available devices that this Hub awares of
+	// with tieir full description.
+	DeviceList(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*DevicesReply, error)
+	// GetDeviceProperties allows to obtain previously assigned resource
+	// properties for a given device.
+	GetDeviceProperties(ctx context.Context, in *ID, opts ...grpc.CallOption) (*GetDevicePropertiesReply, error)
+	// SetDeviceProperties method allows to specify additional resource
+	// properties for a device specified by its ID.
+	// This may include GPU's capability to execute a well-known work such as
+	// Ethereum mining etc.
+	SetDeviceProperties(ctx context.Context, in *SetDevicePropertiesRequest, opts ...grpc.CallOption) (*Empty, error)
 	// GetAskPlans allows to obtain previously assigned Ask Plans from for a given worker.
-	GetAskPlans(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetAllSlotsReply, error)
+	GetAskPlans(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*SlotsReply, error)
 	// CreateAskPlan allows to create rules
 	// for creating Ask orders on Marketplace
-	CreateAskPlan(ctx context.Context, in *AddSlotRequest, opts ...grpc.CallOption) (*Empty, error)
+	CreateAskPlan(ctx context.Context, in *Slot, opts ...grpc.CallOption) (*Empty, error)
 	// RemoveAskPlan allows to remove rules
 	// for creating Ask orders on Marketplace
-	RemoveAskPlan(ctx context.Context, in *ID, opts ...grpc.CallOption) (*Empty, error)
+	RemoveAskPlan(ctx context.Context, in *Slot, opts ...grpc.CallOption) (*Empty, error)
 	// List produces a list of all running tasks on the Hub
 	TaskList(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*TaskListReply, error)
 	// Status produces a detailed info about task on the Hub
@@ -589,9 +593,9 @@ func (c *hubManagementClient) WorkerStatus(ctx context.Context, in *ID, opts ...
 	return out, nil
 }
 
-func (c *hubManagementClient) GetRegistredWorkers(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetRegistredWorkersReply, error) {
-	out := new(GetRegistredWorkersReply)
-	err := grpc.Invoke(ctx, "/sonm.HubManagement/GetRegistredWorkers", in, out, c.cc, opts...)
+func (c *hubManagementClient) GetRegisteredWorkers(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetRegisteredWorkersReply, error) {
+	out := new(GetRegisteredWorkersReply)
+	err := grpc.Invoke(ctx, "/sonm.HubManagement/GetRegisteredWorkers", in, out, c.cc, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -607,35 +611,44 @@ func (c *hubManagementClient) RegisterWorker(ctx context.Context, in *ID, opts .
 	return out, nil
 }
 
-func (c *hubManagementClient) UnregisterWorker(ctx context.Context, in *ID, opts ...grpc.CallOption) (*Empty, error) {
+func (c *hubManagementClient) DeregisterWorker(ctx context.Context, in *ID, opts ...grpc.CallOption) (*Empty, error) {
 	out := new(Empty)
-	err := grpc.Invoke(ctx, "/sonm.HubManagement/UnregisterWorker", in, out, c.cc, opts...)
+	err := grpc.Invoke(ctx, "/sonm.HubManagement/DeregisterWorker", in, out, c.cc, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *hubManagementClient) GetWorkerProperties(ctx context.Context, in *ID, opts ...grpc.CallOption) (*GetMinerPropertiesReply, error) {
-	out := new(GetMinerPropertiesReply)
-	err := grpc.Invoke(ctx, "/sonm.HubManagement/GetWorkerProperties", in, out, c.cc, opts...)
+func (c *hubManagementClient) DeviceList(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*DevicesReply, error) {
+	out := new(DevicesReply)
+	err := grpc.Invoke(ctx, "/sonm.HubManagement/DeviceList", in, out, c.cc, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *hubManagementClient) SetWorkerProperties(ctx context.Context, in *SetMinerPropertiesRequest, opts ...grpc.CallOption) (*Empty, error) {
+func (c *hubManagementClient) GetDeviceProperties(ctx context.Context, in *ID, opts ...grpc.CallOption) (*GetDevicePropertiesReply, error) {
+	out := new(GetDevicePropertiesReply)
+	err := grpc.Invoke(ctx, "/sonm.HubManagement/GetDeviceProperties", in, out, c.cc, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hubManagementClient) SetDeviceProperties(ctx context.Context, in *SetDevicePropertiesRequest, opts ...grpc.CallOption) (*Empty, error) {
 	out := new(Empty)
-	err := grpc.Invoke(ctx, "/sonm.HubManagement/SetWorkerProperties", in, out, c.cc, opts...)
+	err := grpc.Invoke(ctx, "/sonm.HubManagement/SetDeviceProperties", in, out, c.cc, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *hubManagementClient) GetAskPlans(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetAllSlotsReply, error) {
-	out := new(GetAllSlotsReply)
+func (c *hubManagementClient) GetAskPlans(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*SlotsReply, error) {
+	out := new(SlotsReply)
 	err := grpc.Invoke(ctx, "/sonm.HubManagement/GetAskPlans", in, out, c.cc, opts...)
 	if err != nil {
 		return nil, err
@@ -643,7 +656,7 @@ func (c *hubManagementClient) GetAskPlans(ctx context.Context, in *Empty, opts .
 	return out, nil
 }
 
-func (c *hubManagementClient) CreateAskPlan(ctx context.Context, in *AddSlotRequest, opts ...grpc.CallOption) (*Empty, error) {
+func (c *hubManagementClient) CreateAskPlan(ctx context.Context, in *Slot, opts ...grpc.CallOption) (*Empty, error) {
 	out := new(Empty)
 	err := grpc.Invoke(ctx, "/sonm.HubManagement/CreateAskPlan", in, out, c.cc, opts...)
 	if err != nil {
@@ -652,7 +665,7 @@ func (c *hubManagementClient) CreateAskPlan(ctx context.Context, in *AddSlotRequ
 	return out, nil
 }
 
-func (c *hubManagementClient) RemoveAskPlan(ctx context.Context, in *ID, opts ...grpc.CallOption) (*Empty, error) {
+func (c *hubManagementClient) RemoveAskPlan(ctx context.Context, in *Slot, opts ...grpc.CallOption) (*Empty, error) {
 	out := new(Empty)
 	err := grpc.Invoke(ctx, "/sonm.HubManagement/RemoveAskPlan", in, out, c.cc, opts...)
 	if err != nil {
@@ -688,28 +701,32 @@ type HubManagementServer interface {
 	WorkersList(context.Context, *Empty) (*ListReply, error)
 	// WorkersStatus produces a detailed info about a Worker with given ID
 	WorkerStatus(context.Context, *ID) (*InfoReply, error)
-	// GetRegistredWorkers produce a list of Workers IDs allowed
+	// GetRegisteredWorkers produce a list of Workers IDs allowed
 	// to connect to this hub
-	GetRegistredWorkers(context.Context, *Empty) (*GetRegistredWorkersReply, error)
+	GetRegisteredWorkers(context.Context, *Empty) (*GetRegisteredWorkersReply, error)
 	// RegisterWorkers allows Worker with given ID connect to Hub
 	RegisterWorker(context.Context, *ID) (*Empty, error)
-	// RegisterWorkers deny Worker with given ID connect to Hub
-	UnregisterWorker(context.Context, *ID) (*Empty, error)
-	// GetMinerProperties allows to obtain previously assigned resource
-	// properties for a given miner
-	GetWorkerProperties(context.Context, *ID) (*GetMinerPropertiesReply, error)
-	// SetMinerProperties method allows to specify additional resource
-	// properties for a miner specified by its ID
-	// Note, that this method overrides all previously specified properties.
-	SetWorkerProperties(context.Context, *SetMinerPropertiesRequest) (*Empty, error)
+	// DeregisterWorkers deny Worker with given ID connect to Hub
+	DeregisterWorker(context.Context, *ID) (*Empty, error)
+	// Devices returns list of all available devices that this Hub awares of
+	// with tieir full description.
+	DeviceList(context.Context, *Empty) (*DevicesReply, error)
+	// GetDeviceProperties allows to obtain previously assigned resource
+	// properties for a given device.
+	GetDeviceProperties(context.Context, *ID) (*GetDevicePropertiesReply, error)
+	// SetDeviceProperties method allows to specify additional resource
+	// properties for a device specified by its ID.
+	// This may include GPU's capability to execute a well-known work such as
+	// Ethereum mining etc.
+	SetDeviceProperties(context.Context, *SetDevicePropertiesRequest) (*Empty, error)
 	// GetAskPlans allows to obtain previously assigned Ask Plans from for a given worker.
-	GetAskPlans(context.Context, *Empty) (*GetAllSlotsReply, error)
+	GetAskPlans(context.Context, *Empty) (*SlotsReply, error)
 	// CreateAskPlan allows to create rules
 	// for creating Ask orders on Marketplace
-	CreateAskPlan(context.Context, *AddSlotRequest) (*Empty, error)
+	CreateAskPlan(context.Context, *Slot) (*Empty, error)
 	// RemoveAskPlan allows to remove rules
 	// for creating Ask orders on Marketplace
-	RemoveAskPlan(context.Context, *ID) (*Empty, error)
+	RemoveAskPlan(context.Context, *Slot) (*Empty, error)
 	// List produces a list of all running tasks on the Hub
 	TaskList(context.Context, *Empty) (*TaskListReply, error)
 	// Status produces a detailed info about task on the Hub
@@ -774,20 +791,20 @@ func _HubManagement_WorkerStatus_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
-func _HubManagement_GetRegistredWorkers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _HubManagement_GetRegisteredWorkers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(Empty)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(HubManagementServer).GetRegistredWorkers(ctx, in)
+		return srv.(HubManagementServer).GetRegisteredWorkers(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/sonm.HubManagement/GetRegistredWorkers",
+		FullMethod: "/sonm.HubManagement/GetRegisteredWorkers",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(HubManagementServer).GetRegistredWorkers(ctx, req.(*Empty))
+		return srv.(HubManagementServer).GetRegisteredWorkers(ctx, req.(*Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -810,56 +827,74 @@ func _HubManagement_RegisterWorker_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
-func _HubManagement_UnregisterWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _HubManagement_DeregisterWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ID)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(HubManagementServer).UnregisterWorker(ctx, in)
+		return srv.(HubManagementServer).DeregisterWorker(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/sonm.HubManagement/UnregisterWorker",
+		FullMethod: "/sonm.HubManagement/DeregisterWorker",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(HubManagementServer).UnregisterWorker(ctx, req.(*ID))
+		return srv.(HubManagementServer).DeregisterWorker(ctx, req.(*ID))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _HubManagement_GetWorkerProperties_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _HubManagement_DeviceList_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HubManagementServer).DeviceList(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/sonm.HubManagement/DeviceList",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HubManagementServer).DeviceList(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HubManagement_GetDeviceProperties_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ID)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(HubManagementServer).GetWorkerProperties(ctx, in)
+		return srv.(HubManagementServer).GetDeviceProperties(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/sonm.HubManagement/GetWorkerProperties",
+		FullMethod: "/sonm.HubManagement/GetDeviceProperties",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(HubManagementServer).GetWorkerProperties(ctx, req.(*ID))
+		return srv.(HubManagementServer).GetDeviceProperties(ctx, req.(*ID))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _HubManagement_SetWorkerProperties_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetMinerPropertiesRequest)
+func _HubManagement_SetDeviceProperties_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetDevicePropertiesRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(HubManagementServer).SetWorkerProperties(ctx, in)
+		return srv.(HubManagementServer).SetDeviceProperties(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/sonm.HubManagement/SetWorkerProperties",
+		FullMethod: "/sonm.HubManagement/SetDeviceProperties",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(HubManagementServer).SetWorkerProperties(ctx, req.(*SetMinerPropertiesRequest))
+		return srv.(HubManagementServer).SetDeviceProperties(ctx, req.(*SetDevicePropertiesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -883,7 +918,7 @@ func _HubManagement_GetAskPlans_Handler(srv interface{}, ctx context.Context, de
 }
 
 func _HubManagement_CreateAskPlan_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AddSlotRequest)
+	in := new(Slot)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -895,13 +930,13 @@ func _HubManagement_CreateAskPlan_Handler(srv interface{}, ctx context.Context, 
 		FullMethod: "/sonm.HubManagement/CreateAskPlan",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(HubManagementServer).CreateAskPlan(ctx, req.(*AddSlotRequest))
+		return srv.(HubManagementServer).CreateAskPlan(ctx, req.(*Slot))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _HubManagement_RemoveAskPlan_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ID)
+	in := new(Slot)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -913,7 +948,7 @@ func _HubManagement_RemoveAskPlan_Handler(srv interface{}, ctx context.Context, 
 		FullMethod: "/sonm.HubManagement/RemoveAskPlan",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(HubManagementServer).RemoveAskPlan(ctx, req.(*ID))
+		return srv.(HubManagementServer).RemoveAskPlan(ctx, req.(*Slot))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -971,24 +1006,28 @@ var _HubManagement_serviceDesc = grpc.ServiceDesc{
 			Handler:    _HubManagement_WorkerStatus_Handler,
 		},
 		{
-			MethodName: "GetRegistredWorkers",
-			Handler:    _HubManagement_GetRegistredWorkers_Handler,
+			MethodName: "GetRegisteredWorkers",
+			Handler:    _HubManagement_GetRegisteredWorkers_Handler,
 		},
 		{
 			MethodName: "RegisterWorker",
 			Handler:    _HubManagement_RegisterWorker_Handler,
 		},
 		{
-			MethodName: "UnregisterWorker",
-			Handler:    _HubManagement_UnregisterWorker_Handler,
+			MethodName: "DeregisterWorker",
+			Handler:    _HubManagement_DeregisterWorker_Handler,
 		},
 		{
-			MethodName: "GetWorkerProperties",
-			Handler:    _HubManagement_GetWorkerProperties_Handler,
+			MethodName: "DeviceList",
+			Handler:    _HubManagement_DeviceList_Handler,
 		},
 		{
-			MethodName: "SetWorkerProperties",
-			Handler:    _HubManagement_SetWorkerProperties_Handler,
+			MethodName: "GetDeviceProperties",
+			Handler:    _HubManagement_GetDeviceProperties_Handler,
+		},
+		{
+			MethodName: "SetDeviceProperties",
+			Handler:    _HubManagement_SetDeviceProperties_Handler,
 		},
 		{
 			MethodName: "GetAskPlans",
@@ -1018,44 +1057,44 @@ var _HubManagement_serviceDesc = grpc.ServiceDesc{
 func init() { proto.RegisterFile("node.proto", fileDescriptor7) }
 
 var fileDescriptor7 = []byte{
-	// 617 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x8c, 0x54, 0xdd, 0x6e, 0xd3, 0x4c,
-	0x10, 0xb5, 0xdb, 0x34, 0x5f, 0x3b, 0x69, 0x7e, 0xb4, 0xed, 0x87, 0x42, 0x24, 0xda, 0x60, 0x21,
-	0x91, 0x52, 0x35, 0x45, 0xa1, 0xdc, 0x13, 0xea, 0xb4, 0xb5, 0xd4, 0x96, 0x60, 0xf3, 0x73, 0xc3,
-	0x8d, 0x23, 0x2f, 0x89, 0x15, 0x67, 0xd7, 0xec, 0xae, 0x41, 0x79, 0x06, 0x5e, 0x88, 0xa7, 0xe2,
-	0x19, 0xd0, 0x7a, 0xed, 0xd8, 0x71, 0x63, 0xc1, 0x95, 0x7d, 0x66, 0xce, 0xcc, 0x9c, 0x3d, 0xfb,
-	0x03, 0x40, 0xa8, 0x87, 0xfb, 0x21, 0xa3, 0x82, 0xa2, 0x0a, 0xa7, 0x64, 0xd1, 0x69, 0xfa, 0x44,
-	0x7e, 0x89, 0xef, 0xaa, 0x70, 0xa7, 0xb6, 0xf0, 0x09, 0x66, 0x09, 0xd8, 0x9b, 0x45, 0x13, 0xf5,
-	0x6b, 0x3c, 0x87, 0xe6, 0x07, 0x97, 0xcf, 0x6f, 0x7d, 0x2e, 0x6c, 0xfc, 0x2d, 0xc2, 0x5c, 0xa0,
-	0x43, 0xd8, 0x99, 0x45, 0x13, 0xcb, 0x6c, 0xeb, 0x5d, 0xbd, 0xb7, 0x67, 0x2b, 0x60, 0x7c, 0x81,
-	0x8a, 0x89, 0xdd, 0x40, 0x66, 0xdf, 0xfa, 0x5e, 0x96, 0x8d, 0x81, 0x8c, 0x0e, 0xf9, 0xdc, 0x32,
-	0xdb, 0x5b, 0x2a, 0x1a, 0x03, 0xd4, 0x83, 0x2a, 0x17, 0xae, 0x88, 0x78, 0x7b, 0xbb, 0xab, 0xf7,
-	0x1a, 0x83, 0x56, 0x5f, 0x8a, 0xea, 0xcb, 0x3e, 0x4e, 0x1c, 0xb7, 0x93, 0xbc, 0xf1, 0x1e, 0x9a,
-	0x32, 0x5a, 0x90, 0x41, 0x7f, 0x10, 0xcc, 0xd2, 0x41, 0x31, 0xc8, 0xb5, 0xdc, 0xfa, 0x4b, 0xcb,
-	0x73, 0xa8, 0x67, 0x2d, 0xc3, 0x60, 0x89, 0x8e, 0xa0, 0xe2, 0x61, 0x37, 0x68, 0xeb, 0xdd, 0xed,
-	0x5e, 0x6d, 0x00, 0x59, 0xa1, 0x1d, 0xc7, 0x5f, 0xbc, 0x06, 0xc8, 0xda, 0xa0, 0x1a, 0xfc, 0x37,
-	0x1e, 0xdd, 0x9b, 0xd6, 0xfd, 0x75, 0x4b, 0x43, 0xfb, 0xb0, 0x3b, 0x1c, 0x8f, 0xed, 0x77, 0x9f,
-	0x46, 0x66, 0x4b, 0x97, 0xe8, 0xca, 0xba, 0xb7, 0x9c, 0x9b, 0x91, 0xd9, 0xda, 0x1a, 0xfc, 0xd6,
-	0xa1, 0x21, 0x2d, 0xbc, 0x73, 0x89, 0x3b, 0xc5, 0x0b, 0x4c, 0x04, 0xba, 0x80, 0x8a, 0x1c, 0x8b,
-	0xfe, 0x57, 0x33, 0x0a, 0x06, 0x77, 0x0e, 0x8a, 0xe1, 0x30, 0x58, 0x1a, 0x1a, 0xba, 0x80, 0x1d,
-	0x47, 0xb8, 0x4c, 0xa0, 0xc7, 0x2a, 0x7f, 0x13, 0x4d, 0x62, 0x2c, 0x79, 0x69, 0x69, 0x23, 0x2b,
-	0xb5, 0xc8, 0x57, 0x6a, 0x68, 0xe8, 0x19, 0x54, 0x13, 0xc5, 0xbb, 0x2a, 0x67, 0x99, 0x1b, 0x58,
-	0x27, 0x50, 0xb9, 0xa5, 0xd3, 0x3c, 0x27, 0x2f, 0x82, 0x4e, 0xf9, 0xe5, 0x2c, 0x22, 0x73, 0x43,
-	0x7b, 0xa9, 0xa3, 0x63, 0xa8, 0x38, 0x82, 0x86, 0x39, 0x6a, 0x4d, 0xfd, 0x8d, 0x16, 0xa1, 0x58,
-	0x1a, 0xda, 0xe0, 0xa7, 0x0e, 0x0d, 0x69, 0x54, 0xf9, 0x82, 0x0b, 0x5b, 0x99, 0xce, 0x5a, 0xdb,
-	0x0e, 0x43, 0x43, 0xdd, 0x0d, 0xd2, 0x73, 0xdb, 0x62, 0x68, 0xe8, 0x29, 0x54, 0xaf, 0x7c, 0xe2,
-	0xf3, 0x59, 0xb9, 0x9a, 0x5f, 0x3b, 0x50, 0xbf, 0x89, 0x26, 0x39, 0x31, 0x67, 0xab, 0xb6, 0x79,
-	0x6a, 0xe7, 0x30, 0xef, 0xaa, 0x3c, 0x28, 0x89, 0x8a, 0x33, 0xa8, 0x7d, 0xa6, 0x6c, 0x8e, 0x19,
-	0x8f, 0x97, 0xb0, 0x56, 0xd3, 0x54, 0x20, 0x2f, 0xfa, 0x14, 0xf6, 0x15, 0xfd, 0x81, 0xf4, 0x84,
-	0x2c, 0x1d, 0x4f, 0xc9, 0x26, 0x1c, 0x5c, 0x63, 0x61, 0xe3, 0xa9, 0xcf, 0x05, 0xc3, 0x5e, 0x32,
-	0x67, 0x7d, 0xc6, 0x91, 0x02, 0x1b, 0x78, 0x69, 0x97, 0x13, 0x68, 0xa8, 0x14, 0x66, 0x2a, 0x53,
-	0xea, 0x06, 0x3a, 0x85, 0xd6, 0x47, 0xc2, 0xfe, 0x91, 0xfc, 0x26, 0x56, 0xa7, 0x58, 0x63, 0x46,
-	0x43, 0xcc, 0x84, 0x8f, 0xf3, 0x2b, 0x7a, 0xb2, 0x92, 0x76, 0x27, 0x5f, 0x8f, 0x8c, 0x93, 0x2a,
-	0x1b, 0xc1, 0x81, 0xb3, 0xa1, 0xc3, 0xb1, 0xaa, 0x73, 0x36, 0xd4, 0xa9, 0x03, 0x51, 0x10, 0x72,
-	0x01, 0xb5, 0x6b, 0x2c, 0x86, 0x7c, 0x3e, 0x0e, 0x5c, 0x52, 0xb0, 0xe7, 0xd1, 0x4a, 0xc3, 0x30,
-	0x08, 0x9c, 0x80, 0x0a, 0x9e, 0xdd, 0x97, 0xfa, 0x25, 0xc3, 0xae, 0xc0, 0x49, 0x21, 0x4a, 0x76,
-	0x78, 0xe8, 0x79, 0x92, 0x57, 0x32, 0xab, 0x07, 0x75, 0x1b, 0x2f, 0xe8, 0xf7, 0x55, 0x55, 0xa9,
-	0x3d, 0x7d, 0xd8, 0x4d, 0xaf, 0xe8, 0xba, 0xa4, 0x92, 0xfb, 0x7b, 0x0e, 0x20, 0x43, 0x0f, 0xce,
-	0x45, 0xee, 0x15, 0x58, 0x3b, 0x79, 0x93, 0x6a, 0xfc, 0x04, 0xbf, 0xfa, 0x13, 0x00, 0x00, 0xff,
-	0xff, 0x62, 0xa0, 0x80, 0xdb, 0xbf, 0x05, 0x00, 0x00,
+	// 623 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x8c, 0x54, 0x5d, 0x6e, 0xd3, 0x40,
+	0x10, 0xb6, 0x5b, 0x37, 0xb4, 0xe3, 0xe6, 0x47, 0xdb, 0x22, 0x85, 0x3c, 0xb4, 0xc1, 0x42, 0x22,
+	0x6d, 0xd5, 0x14, 0x85, 0x72, 0x80, 0x50, 0xa7, 0xa9, 0xa5, 0x52, 0x82, 0x8d, 0xe0, 0x85, 0x17,
+	0x9b, 0x2c, 0x89, 0x15, 0x67, 0xd7, 0x78, 0xd7, 0x45, 0x39, 0x03, 0x87, 0xe4, 0x06, 0x9c, 0x01,
+	0xad, 0xd7, 0x8e, 0x1d, 0x27, 0x11, 0x7d, 0xf3, 0x7c, 0xf3, 0xcd, 0xcc, 0xb7, 0xdf, 0x8e, 0x17,
+	0x80, 0xd0, 0x31, 0xee, 0x86, 0x11, 0xe5, 0x14, 0x69, 0x8c, 0x92, 0x79, 0xeb, 0xc0, 0xf3, 0xc7,
+	0x12, 0x68, 0xd5, 0x7d, 0x22, 0x20, 0xe2, 0xbb, 0x29, 0xa0, 0xcf, 0x7d, 0x82, 0xa3, 0x34, 0x38,
+	0x98, 0xc6, 0x9e, 0xfc, 0x34, 0x5e, 0x43, 0xfd, 0xb3, 0xcb, 0x66, 0xf7, 0x3e, 0xe3, 0x36, 0xfe,
+	0x19, 0x63, 0xc6, 0xd1, 0x31, 0xec, 0x4d, 0x63, 0xcf, 0x32, 0x9b, 0x6a, 0x5b, 0xed, 0x1c, 0xd8,
+	0x32, 0x30, 0xbe, 0x81, 0x66, 0x62, 0x37, 0x10, 0xd9, 0xf7, 0xfe, 0x38, 0xcf, 0x26, 0x81, 0x40,
+	0xfb, 0x6c, 0x66, 0x99, 0xcd, 0x1d, 0x89, 0x26, 0x01, 0xea, 0x40, 0x85, 0x71, 0x97, 0xc7, 0xac,
+	0xb9, 0xdb, 0x56, 0x3b, 0xb5, 0x5e, 0xa3, 0x2b, 0x44, 0x75, 0x45, 0x1f, 0x27, 0xc1, 0xed, 0x34,
+	0x6f, 0x7c, 0x82, 0xba, 0x40, 0x4b, 0x32, 0xe8, 0x2f, 0x82, 0xa3, 0x6c, 0x50, 0x12, 0x14, 0x5a,
+	0xee, 0xfc, 0xa7, 0xe5, 0x15, 0x54, 0xf3, 0x96, 0x61, 0xb0, 0x40, 0x27, 0xa0, 0x8d, 0xb1, 0x1b,
+	0x34, 0xd5, 0xf6, 0x6e, 0x47, 0xef, 0x41, 0x5e, 0x68, 0x27, 0xf8, 0xf9, 0x3b, 0x80, 0xbc, 0x0d,
+	0xd2, 0xe1, 0xd9, 0x68, 0xf0, 0x60, 0x5a, 0x0f, 0xc3, 0x86, 0x82, 0x0e, 0x61, 0xbf, 0x3f, 0x1a,
+	0xd9, 0x1f, 0xbf, 0x0c, 0xcc, 0x86, 0x2a, 0xa2, 0x5b, 0xeb, 0xc1, 0x72, 0xee, 0x06, 0x66, 0x63,
+	0xa7, 0xf7, 0x57, 0x85, 0x9a, 0xb0, 0xf0, 0x83, 0x4b, 0xdc, 0x09, 0x9e, 0x63, 0xc2, 0xd1, 0x35,
+	0x68, 0x62, 0x2c, 0x7a, 0x2e, 0x67, 0x94, 0x0c, 0x6e, 0x1d, 0x95, 0xe1, 0x30, 0x58, 0x18, 0x0a,
+	0xba, 0x86, 0x3d, 0x87, 0xbb, 0x11, 0x47, 0x2f, 0x64, 0xfe, 0x2e, 0xf6, 0x92, 0x58, 0xf0, 0xb2,
+	0xd2, 0x5a, 0x5e, 0x6a, 0x91, 0x1f, 0xd4, 0x50, 0xd0, 0x2b, 0xa8, 0xa4, 0x8a, 0xf7, 0x65, 0xce,
+	0x32, 0x37, 0xb0, 0xce, 0x40, 0xbb, 0xa7, 0x93, 0x22, 0xa7, 0x28, 0x82, 0x4e, 0xd8, 0xcd, 0x34,
+	0x26, 0x33, 0x43, 0x79, 0xa3, 0xa2, 0x53, 0xd0, 0x1c, 0x4e, 0xc3, 0x02, 0x55, 0x97, 0x5f, 0x83,
+	0x79, 0xc8, 0x17, 0x86, 0xd2, 0xfb, 0xad, 0x42, 0x4d, 0x18, 0xb5, 0xfd, 0xc0, 0xa5, 0xab, 0xcc,
+	0x66, 0xad, 0x5c, 0x87, 0xa1, 0xa0, 0xf6, 0x06, 0xe9, 0x85, 0x6b, 0x31, 0x14, 0xf4, 0x12, 0x2a,
+	0xb7, 0x3e, 0xf1, 0xd9, 0x74, 0xbb, 0x9a, 0x3f, 0x7b, 0x50, 0xbd, 0x8b, 0xbd, 0x82, 0x98, 0xcb,
+	0x65, 0xdb, 0x22, 0xb5, 0x75, 0x5c, 0x74, 0x55, 0x2c, 0x4a, 0xaa, 0xe2, 0x12, 0xf4, 0xaf, 0x34,
+	0x9a, 0xe1, 0x88, 0x25, 0x47, 0x58, 0xa9, 0xa9, 0xcb, 0xa0, 0x28, 0xfa, 0x02, 0x0e, 0x25, 0x7d,
+	0x4d, 0x7a, 0x4a, 0x16, 0x8e, 0x67, 0xe4, 0x5b, 0x38, 0x1e, 0x62, 0x6e, 0xe3, 0x89, 0xcf, 0x38,
+	0x8e, 0xf0, 0x38, 0x1d, 0xb4, 0x3a, 0xe4, 0x54, 0x06, 0x9b, 0x88, 0x59, 0x9f, 0x33, 0xa8, 0x65,
+	0x39, 0x99, 0xd9, 0xea, 0x07, 0xba, 0x80, 0x86, 0x89, 0xa3, 0x27, 0x92, 0xaf, 0xc4, 0xca, 0x3f,
+	0xfa, 0xdf, 0xf1, 0xfa, 0xd1, 0x51, 0x76, 0x11, 0x22, 0xbd, 0x14, 0xd2, 0x87, 0xa3, 0x21, 0xe6,
+	0x12, 0x1c, 0x45, 0x34, 0xc4, 0x11, 0xf7, 0x71, 0xd1, 0x84, 0x93, 0xe5, 0x61, 0xca, 0xa4, 0xdc,
+	0x93, 0x23, 0x67, 0x43, 0x8b, 0xb6, 0x2c, 0x74, 0x36, 0x15, 0xca, 0x2d, 0x2a, 0x69, 0xef, 0x82,
+	0x3e, 0xc4, 0xbc, 0xcf, 0x66, 0xa3, 0xc0, 0x25, 0x25, 0x4b, 0xd3, 0x57, 0xc1, 0x09, 0x28, 0x5f,
+	0xce, 0x3d, 0x87, 0xea, 0x4d, 0x84, 0x5d, 0x8e, 0xd3, 0x12, 0x04, 0x39, 0xa9, 0xdc, 0xfb, 0x1c,
+	0xaa, 0x36, 0x9e, 0xd3, 0xc7, 0xa7, 0x70, 0xbb, 0xb0, 0x9f, 0xfd, 0xc9, 0xab, 0x22, 0xb6, 0xfc,
+	0xe6, 0x57, 0x00, 0x02, 0x5a, 0x5b, 0x9f, 0xc2, 0x63, 0xb1, 0xb2, 0xa0, 0x5e, 0x25, 0x79, 0xa9,
+	0xdf, 0xfe, 0x0b, 0x00, 0x00, 0xff, 0xff, 0xf1, 0x21, 0xde, 0x2a, 0xf1, 0x05, 0x00, 0x00,
 }

@@ -28,9 +28,9 @@ func (h *hubAPI) WorkerStatus(ctx context.Context, req *pb.ID) (*pb.InfoReply, e
 	return h.hub.Info(ctx, req)
 }
 
-func (h *hubAPI) GetRegistredWorkers(ctx context.Context, req *pb.Empty) (*pb.GetRegistredWorkersReply, error) {
-	log.G(h.ctx).Info("handling GetRegistredWorkers request")
-	return h.hub.GetRegistredWorkers(ctx, req)
+func (h *hubAPI) GetRegisteredWorkers(ctx context.Context, req *pb.Empty) (*pb.GetRegisteredWorkersReply, error) {
+	log.G(h.ctx).Info("handling GetRegisteredWorkers request")
+	return h.hub.GetRegisteredWorkers(ctx, req)
 }
 
 func (h *hubAPI) RegisterWorker(ctx context.Context, req *pb.ID) (*pb.Empty, error) {
@@ -38,40 +38,43 @@ func (h *hubAPI) RegisterWorker(ctx context.Context, req *pb.ID) (*pb.Empty, err
 	return h.hub.RegisterWorker(ctx, req)
 }
 
-func (h *hubAPI) UnregisterWorker(ctx context.Context, req *pb.ID) (*pb.Empty, error) {
-	log.G(h.ctx).Info("handling UnregisterWorkers request")
-	return h.hub.UnregisterWorker(ctx, req)
+func (h *hubAPI) DeregisterWorker(ctx context.Context, req *pb.ID) (*pb.Empty, error) {
+	log.G(h.ctx).Info("handling DeregisterWorkers request")
+	return h.hub.DeregisterWorker(ctx, req)
 }
 
-func (h *hubAPI) GetWorkerProperties(ctx context.Context, req *pb.ID) (*pb.GetMinerPropertiesReply, error) {
-	log.G(h.ctx).Info("handling GetWorkerProperties request")
-	return h.hub.GetMinerProperties(ctx, req)
+func (h *hubAPI) DeviceList(ctx context.Context, req *pb.Empty) (*pb.DevicesReply, error) {
+	log.G(h.ctx).Info("handling DeviceList request")
+	return h.hub.Devices(ctx, req)
 }
 
-func (h *hubAPI) SetWorkerProperties(ctx context.Context, req *pb.SetMinerPropertiesRequest) (*pb.Empty, error) {
-	log.G(h.ctx).Info("handling SetWorkerProperties request")
-	return h.hub.SetMinerProperties(ctx, req)
+func (h *hubAPI) GetDeviceProperties(ctx context.Context, req *pb.ID) (*pb.GetDevicePropertiesReply, error) {
+	log.G(h.ctx).Info("handling GetDeviceProperties request")
+	return h.hub.GetDeviceProperties(ctx, req)
 }
 
-func (h *hubAPI) GetAskPlans(ctx context.Context, req *pb.Empty) (*pb.GetAllSlotsReply, error) {
-	log.G(h.ctx).Info("GetAskPlan")
-	reply, err := h.hub.GetAllSlots(ctx, &pb.Empty{})
-	if err != nil {
-		return nil, err
-	}
-
-	return reply, nil
+func (h *hubAPI) SetDeviceProperties(ctx context.Context, req *pb.SetDevicePropertiesRequest) (*pb.Empty, error) {
+	log.G(h.ctx).Info("handling SetDeviceProperties request")
+	return h.hub.SetDeviceProperties(ctx, req)
 }
 
-func (h *hubAPI) CreateAskPlan(ctx context.Context, req *pb.AddSlotRequest) (*pb.Empty, error) {
+func (h *hubAPI) GetAskPlan(context.Context, *pb.ID) (*pb.SlotsReply, error) {
+	return &pb.SlotsReply{}, nil
+}
+
+func (h *hubAPI) GetAskPlans(ctx context.Context, req *pb.Empty) (*pb.SlotsReply, error) {
+	log.G(h.ctx).Info("GetAskPlans")
+	return h.hub.Slots(ctx, &pb.Empty{})
+}
+
+func (h *hubAPI) CreateAskPlan(ctx context.Context, req *pb.Slot) (*pb.Empty, error) {
 	log.G(h.ctx).Info("CreateAskPlan")
-	return h.hub.AddSlot(ctx, req)
+	return h.hub.InsertSlot(ctx, req)
 }
 
-func (h *hubAPI) RemoveAskPlan(ctx context.Context, req *pb.ID) (*pb.Empty, error) {
-	log.G(h.ctx).Info("RemoveAskPlan")
-	request := &pb.RemoveSlotRequest{ID: req.GetId()}
-	return h.hub.RemoveSlot(ctx, request)
+func (h *hubAPI) RemoveAskPlan(ctx context.Context, req *pb.Slot) (*pb.Empty, error) {
+	log.G(h.ctx).Info("handling RemoveAskPlan request")
+	return h.hub.RemoveSlot(ctx, req)
 }
 
 func (h *hubAPI) TaskList(ctx context.Context, req *pb.Empty) (*pb.TaskListReply, error) {
@@ -82,20 +85,6 @@ func (h *hubAPI) TaskList(ctx context.Context, req *pb.Empty) (*pb.TaskListReply
 func (h *hubAPI) TaskStatus(ctx context.Context, req *pb.ID) (*pb.TaskStatusReply, error) {
 	log.G(h.ctx).Info("handling TaskStatus request")
 	return h.hub.TaskStatus(ctx, req)
-}
-
-func (h *hubAPI) getWorkersIDs(ctx context.Context) ([]string, error) {
-	workers, err := h.hub.List(ctx, &pb.Empty{})
-	if err != nil {
-		return nil, err
-	}
-
-	ids := []string{}
-	for id := range workers.GetInfo() {
-		ids = append(ids, id)
-	}
-
-	return ids, nil
 }
 
 func newHubAPI(ctx context.Context, conf Config) (pb.HubManagementServer, error) {

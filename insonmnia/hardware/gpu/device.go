@@ -1,10 +1,10 @@
 package gpu
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 
+	"github.com/cnf/structhash"
 	"github.com/sonm-io/core/proto"
 )
 
@@ -24,10 +24,17 @@ type Device interface {
 	// MaxMemorySize returns the total maximum memory size the device can hold
 	// in bytes.
 	MaxMemorySize() uint64
-	// OpenCLDeviceVersion returns the OpenCL major version supported by the device.
+	// MaxClockFrequency returns maximum configured clock frequency of the
+	// device in MHz.
+	MaxClockFrequency() uint
+	// OpenCLDeviceVersion returns the OpenCL major version supported by the
+	// device.
 	OpenCLDeviceVersionMajor() int
-	// OpenCLDeviceVersion returns the OpenCL minor version supported by the device.
+	// OpenCLDeviceVersion returns the OpenCL minor version supported by the
+	// device.
 	OpenCLDeviceVersionMinor() int
+
+	Hash() []byte
 }
 
 type device struct {
@@ -54,7 +61,7 @@ func WithVendorId(id uint) func(*sonm.GPUDevice) error {
 func WithOpenClDeviceVersion(version string) func(*sonm.GPUDevice) error {
 	return func(d *sonm.GPUDevice) error {
 		var vendor string
-		n, err := fmt.Sscanf(version, "OpenCL %d.%d %s", &d.OpenCLVersionMajor, &d.OpenCLVersionMinor, &vendor)
+		n, err := fmt.Sscanf(version, "OpenCL %d.%d %s", &d.OpenCLDeviceVersionMajor, &d.OpenCLDeviceVersionMinor, &vendor)
 		if n < 2 {
 			return errMalformedOpenCLVersion
 		}
@@ -69,17 +76,18 @@ func WithOpenClDeviceVersion(version string) func(*sonm.GPUDevice) error {
 
 func WithOpenClDeviceVersionSpec(major, minor int32) func(*sonm.GPUDevice) error {
 	return func(d *sonm.GPUDevice) error {
-		d.OpenCLVersionMajor = major
-		d.OpenCLVersionMinor = minor
+		d.OpenCLDeviceVersionMajor = major
+		d.OpenCLDeviceVersionMinor = minor
 		return nil
 	}
 }
 
-func NewDevice(name, vendorName string, maxMemorySize uint64, options ...Option) (Device, error) {
+func NewDevice(name, vendorName string, maxClockFrequency, maxMemorySize uint64, options ...Option) (Device, error) {
 	d := sonm.GPUDevice{
-		Name:          name,
-		VendorName:    vendorName,
-		MaxMemorySize: maxMemorySize,
+		Name:              name,
+		VendorName:        vendorName,
+		MaxClockFrequency: maxClockFrequency,
+		MaxMemorySize:     maxMemorySize,
 	}
 
 	for _, option := range options {
@@ -107,23 +115,20 @@ func (d *device) MaxMemorySize() uint64 {
 	return d.d.GetMaxMemorySize()
 }
 
+func (d *device) MaxClockFrequency() uint {
+	return uint(d.d.GetMaxClockFrequency())
+}
+
 func (d *device) OpenCLDeviceVersionMajor() int {
-	return int(d.d.GetOpenCLVersionMajor())
+	return int(d.d.GetOpenCLDeviceVersionMajor())
 }
 
 func (d *device) OpenCLDeviceVersionMinor() int {
-	return int(d.d.GetOpenCLVersionMinor())
+	return int(d.d.GetOpenCLDeviceVersionMinor())
 }
 
-func (d *device) MarshalJSON() ([]byte, error) {
-	return json.Marshal(map[string]interface{}{
-		"name":                     d.Name(),
-		"vendorId":                 d.VendorId(),
-		"vendorName":               d.VendorName(),
-		"maxMemorySize":            d.MaxMemorySize(),
-		"openCLDeviceVersionMajor": d.OpenCLDeviceVersionMajor(),
-		"openCLDeviceVersionMinor": d.OpenCLDeviceVersionMinor(),
-	})
+func (d *device) Hash() []byte {
+	return structhash.Md5(d.d, 1)
 }
 
 // GetGPUDevices returns a list of available GPU devices on the machine.

@@ -212,13 +212,29 @@ func (m *HubStatusReply) GetEthAddr() string {
 }
 
 type DealRequest struct {
-	Order *Order `protobuf:"bytes,1,opt,name=order" json:"order,omitempty"`
+	BidId string `protobuf:"bytes,1,opt,name=bidId" json:"bidId,omitempty"`
+	AskId string `protobuf:"bytes,2,opt,name=askId" json:"askId,omitempty"`
+	Order *Order `protobuf:"bytes,3,opt,name=order" json:"order,omitempty"`
 }
 
 func (m *DealRequest) Reset()                    { *m = DealRequest{} }
 func (m *DealRequest) String() string            { return proto.CompactTextString(m) }
 func (*DealRequest) ProtoMessage()               {}
 func (*DealRequest) Descriptor() ([]byte, []int) { return fileDescriptor2, []int{5} }
+
+func (m *DealRequest) GetBidId() string {
+	if m != nil {
+		return m.BidId
+	}
+	return ""
+}
+
+func (m *DealRequest) GetAskId() string {
+	if m != nil {
+		return m.AskId
+	}
+	return ""
+}
 
 func (m *DealRequest) GetOrder() *Order {
 	if m != nil {
@@ -227,56 +243,58 @@ func (m *DealRequest) GetOrder() *Order {
 	return nil
 }
 
-type GetMinerPropertiesReply struct {
-	Properties map[string]string `protobuf:"bytes,1,rep,name=properties" json:"properties,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+type GetDevicePropertiesReply struct {
+	Properties map[string]float64 `protobuf:"bytes,1,rep,name=properties" json:"properties,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"fixed64,2,opt,name=value"`
 }
 
-func (m *GetMinerPropertiesReply) Reset()                    { *m = GetMinerPropertiesReply{} }
-func (m *GetMinerPropertiesReply) String() string            { return proto.CompactTextString(m) }
-func (*GetMinerPropertiesReply) ProtoMessage()               {}
-func (*GetMinerPropertiesReply) Descriptor() ([]byte, []int) { return fileDescriptor2, []int{6} }
+func (m *GetDevicePropertiesReply) Reset()                    { *m = GetDevicePropertiesReply{} }
+func (m *GetDevicePropertiesReply) String() string            { return proto.CompactTextString(m) }
+func (*GetDevicePropertiesReply) ProtoMessage()               {}
+func (*GetDevicePropertiesReply) Descriptor() ([]byte, []int) { return fileDescriptor2, []int{6} }
 
-func (m *GetMinerPropertiesReply) GetProperties() map[string]string {
+func (m *GetDevicePropertiesReply) GetProperties() map[string]float64 {
 	if m != nil {
 		return m.Properties
 	}
 	return nil
 }
 
-type SetMinerPropertiesRequest struct {
-	ID         string            `protobuf:"bytes,1,opt,name=ID" json:"ID,omitempty"`
-	Properties map[string]string `protobuf:"bytes,2,rep,name=properties" json:"properties,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+type SetDevicePropertiesRequest struct {
+	// Device identifier.
+	ID string `protobuf:"bytes,1,opt,name=ID" json:"ID,omitempty"`
+	// Its properties.
+	Properties map[string]float64 `protobuf:"bytes,2,rep,name=properties" json:"properties,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"fixed64,2,opt,name=value"`
 }
 
-func (m *SetMinerPropertiesRequest) Reset()                    { *m = SetMinerPropertiesRequest{} }
-func (m *SetMinerPropertiesRequest) String() string            { return proto.CompactTextString(m) }
-func (*SetMinerPropertiesRequest) ProtoMessage()               {}
-func (*SetMinerPropertiesRequest) Descriptor() ([]byte, []int) { return fileDescriptor2, []int{7} }
+func (m *SetDevicePropertiesRequest) Reset()                    { *m = SetDevicePropertiesRequest{} }
+func (m *SetDevicePropertiesRequest) String() string            { return proto.CompactTextString(m) }
+func (*SetDevicePropertiesRequest) ProtoMessage()               {}
+func (*SetDevicePropertiesRequest) Descriptor() ([]byte, []int) { return fileDescriptor2, []int{7} }
 
-func (m *SetMinerPropertiesRequest) GetID() string {
+func (m *SetDevicePropertiesRequest) GetID() string {
 	if m != nil {
 		return m.ID
 	}
 	return ""
 }
 
-func (m *SetMinerPropertiesRequest) GetProperties() map[string]string {
+func (m *SetDevicePropertiesRequest) GetProperties() map[string]float64 {
 	if m != nil {
 		return m.Properties
 	}
 	return nil
 }
 
-type GetSlotsReply struct {
+type SlotsReply struct {
 	Slot []*Slot `protobuf:"bytes,1,rep,name=slot" json:"slot,omitempty"`
 }
 
-func (m *GetSlotsReply) Reset()                    { *m = GetSlotsReply{} }
-func (m *GetSlotsReply) String() string            { return proto.CompactTextString(m) }
-func (*GetSlotsReply) ProtoMessage()               {}
-func (*GetSlotsReply) Descriptor() ([]byte, []int) { return fileDescriptor2, []int{8} }
+func (m *SlotsReply) Reset()                    { *m = SlotsReply{} }
+func (m *SlotsReply) String() string            { return proto.CompactTextString(m) }
+func (*SlotsReply) ProtoMessage()               {}
+func (*SlotsReply) Descriptor() ([]byte, []int) { return fileDescriptor2, []int{8} }
 
-func (m *GetSlotsReply) GetSlot() []*Slot {
+func (m *SlotsReply) GetSlot() []*Slot {
 	if m != nil {
 		return m.Slot
 	}
@@ -365,16 +383,16 @@ func (m *RemoveSlotRequest) GetSlot() *Slot {
 	return nil
 }
 
-type GetRegistredWorkersReply struct {
+type GetRegisteredWorkersReply struct {
 	Ids []*ID `protobuf:"bytes,1,rep,name=ids" json:"ids,omitempty"`
 }
 
-func (m *GetRegistredWorkersReply) Reset()                    { *m = GetRegistredWorkersReply{} }
-func (m *GetRegistredWorkersReply) String() string            { return proto.CompactTextString(m) }
-func (*GetRegistredWorkersReply) ProtoMessage()               {}
-func (*GetRegistredWorkersReply) Descriptor() ([]byte, []int) { return fileDescriptor2, []int{12} }
+func (m *GetRegisteredWorkersReply) Reset()                    { *m = GetRegisteredWorkersReply{} }
+func (m *GetRegisteredWorkersReply) String() string            { return proto.CompactTextString(m) }
+func (*GetRegisteredWorkersReply) ProtoMessage()               {}
+func (*GetRegisteredWorkersReply) Descriptor() ([]byte, []int) { return fileDescriptor2, []int{12} }
 
-func (m *GetRegistredWorkersReply) GetIds() []*ID {
+func (m *GetRegisteredWorkersReply) GetIds() []*ID {
 	if m != nil {
 		return m.Ids
 	}
@@ -413,6 +431,84 @@ func (m *TaskListReply_TaskInfo) GetTasks() map[string]*TaskStatusReply {
 	return nil
 }
 
+type CPUDeviceInfo struct {
+	// Miners where such device exists.
+	Miners []string `protobuf:"bytes,1,rep,name=miners" json:"miners,omitempty"`
+	// Its properties.
+	Device *CPUDevice `protobuf:"bytes,2,opt,name=device" json:"device,omitempty"`
+}
+
+func (m *CPUDeviceInfo) Reset()                    { *m = CPUDeviceInfo{} }
+func (m *CPUDeviceInfo) String() string            { return proto.CompactTextString(m) }
+func (*CPUDeviceInfo) ProtoMessage()               {}
+func (*CPUDeviceInfo) Descriptor() ([]byte, []int) { return fileDescriptor2, []int{14} }
+
+func (m *CPUDeviceInfo) GetMiners() []string {
+	if m != nil {
+		return m.Miners
+	}
+	return nil
+}
+
+func (m *CPUDeviceInfo) GetDevice() *CPUDevice {
+	if m != nil {
+		return m.Device
+	}
+	return nil
+}
+
+type GPUDeviceInfo struct {
+	// Miners where such device exists.
+	Miners []string `protobuf:"bytes,1,rep,name=miners" json:"miners,omitempty"`
+	// Its properties.
+	Device *GPUDevice `protobuf:"bytes,2,opt,name=device" json:"device,omitempty"`
+}
+
+func (m *GPUDeviceInfo) Reset()                    { *m = GPUDeviceInfo{} }
+func (m *GPUDeviceInfo) String() string            { return proto.CompactTextString(m) }
+func (*GPUDeviceInfo) ProtoMessage()               {}
+func (*GPUDeviceInfo) Descriptor() ([]byte, []int) { return fileDescriptor2, []int{15} }
+
+func (m *GPUDeviceInfo) GetMiners() []string {
+	if m != nil {
+		return m.Miners
+	}
+	return nil
+}
+
+func (m *GPUDeviceInfo) GetDevice() *GPUDevice {
+	if m != nil {
+		return m.Device
+	}
+	return nil
+}
+
+type DevicesReply struct {
+	// CPU unique ID -> Info.
+	CPUs map[string]*CPUDeviceInfo `protobuf:"bytes,1,rep,name=CPUs" json:"CPUs,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// GPU unique ID -> Info.
+	GPUs map[string]*GPUDeviceInfo `protobuf:"bytes,2,rep,name=GPUs" json:"GPUs,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+}
+
+func (m *DevicesReply) Reset()                    { *m = DevicesReply{} }
+func (m *DevicesReply) String() string            { return proto.CompactTextString(m) }
+func (*DevicesReply) ProtoMessage()               {}
+func (*DevicesReply) Descriptor() ([]byte, []int) { return fileDescriptor2, []int{16} }
+
+func (m *DevicesReply) GetCPUs() map[string]*CPUDeviceInfo {
+	if m != nil {
+		return m.CPUs
+	}
+	return nil
+}
+
+func (m *DevicesReply) GetGPUs() map[string]*GPUDeviceInfo {
+	if m != nil {
+		return m.GPUs
+	}
+	return nil
+}
+
 func init() {
 	proto.RegisterType((*ListReply)(nil), "sonm.ListReply")
 	proto.RegisterType((*ListReply_ListValue)(nil), "sonm.ListReply.ListValue")
@@ -421,16 +517,19 @@ func init() {
 	proto.RegisterType((*HubStartTaskReply)(nil), "sonm.HubStartTaskReply")
 	proto.RegisterType((*HubStatusReply)(nil), "sonm.HubStatusReply")
 	proto.RegisterType((*DealRequest)(nil), "sonm.DealRequest")
-	proto.RegisterType((*GetMinerPropertiesReply)(nil), "sonm.GetMinerPropertiesReply")
-	proto.RegisterType((*SetMinerPropertiesRequest)(nil), "sonm.SetMinerPropertiesRequest")
-	proto.RegisterType((*GetSlotsReply)(nil), "sonm.GetSlotsReply")
+	proto.RegisterType((*GetDevicePropertiesReply)(nil), "sonm.GetDevicePropertiesReply")
+	proto.RegisterType((*SetDevicePropertiesRequest)(nil), "sonm.SetDevicePropertiesRequest")
+	proto.RegisterType((*SlotsReply)(nil), "sonm.SlotsReply")
 	proto.RegisterType((*GetAllSlotsReply)(nil), "sonm.GetAllSlotsReply")
 	proto.RegisterType((*GetAllSlotsReply_SlotList)(nil), "sonm.GetAllSlotsReply.SlotList")
 	proto.RegisterType((*AddSlotRequest)(nil), "sonm.AddSlotRequest")
 	proto.RegisterType((*RemoveSlotRequest)(nil), "sonm.RemoveSlotRequest")
-	proto.RegisterType((*GetRegistredWorkersReply)(nil), "sonm.GetRegistredWorkersReply")
+	proto.RegisterType((*GetRegisteredWorkersReply)(nil), "sonm.GetRegisteredWorkersReply")
 	proto.RegisterType((*TaskListReply)(nil), "sonm.TaskListReply")
 	proto.RegisterType((*TaskListReply_TaskInfo)(nil), "sonm.TaskListReply.TaskInfo")
+	proto.RegisterType((*CPUDeviceInfo)(nil), "sonm.CPUDeviceInfo")
+	proto.RegisterType((*GPUDeviceInfo)(nil), "sonm.GPUDeviceInfo")
+	proto.RegisterType((*DevicesReply)(nil), "sonm.DevicesReply")
 }
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -461,35 +560,36 @@ type HubClient interface {
 	TaskLogs(ctx context.Context, in *TaskLogsRequest, opts ...grpc.CallOption) (Hub_TaskLogsClient, error)
 	ProposeDeal(ctx context.Context, in *DealRequest, opts ...grpc.CallOption) (*Empty, error)
 	DiscoverHub(ctx context.Context, in *DiscoverHubRequest, opts ...grpc.CallOption) (*Empty, error)
-	// GetMinerProperties allows to obtain previously assigned resource
-	// properties for a given miner.
-	GetMinerProperties(ctx context.Context, in *ID, opts ...grpc.CallOption) (*GetMinerPropertiesReply, error)
-	// SetMinerProperties method allows to specify additional resource
-	// properties for a miner specified by its ID.
+	// Devices returns list of all available devices that this Hub awares of
+	// with tieir full description.
+	Devices(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*DevicesReply, error)
+	// GetDeviceProperties allows to obtain previously assigned resource
+	// properties for a given device.
+	// TODO: Just string?
+	GetDeviceProperties(ctx context.Context, in *ID, opts ...grpc.CallOption) (*GetDevicePropertiesReply, error)
+	// SetDeviceProperties method allows to specify additional resource
+	// properties for a device specified by its ID.
 	// This may include GPU's capability to execute a well-known work such as
 	// Ethereum mining etc.
 	// Note, that this method overrides all previously specified properties.
-	SetMinerProperties(ctx context.Context, in *SetMinerPropertiesRequest, opts ...grpc.CallOption) (*Empty, error)
-	// GetSlots allows to obtain previously assigned slots from for a given
-	// miner.
-	GetSlots(ctx context.Context, in *ID, opts ...grpc.CallOption) (*GetSlotsReply, error)
-	// GetAllSlots returns slots assigned on all Workers on the Hub
-	GetAllSlots(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetAllSlotsReply, error)
-	// AddSlot allows to assign a new slot for a given miner.
-	// This method can fail if either there are no resources left on a miner
-	// or it has been previourly assigned for specified time duration.
-	AddSlot(ctx context.Context, in *AddSlotRequest, opts ...grpc.CallOption) (*Empty, error)
-	// RemoveSlot removes the speified slot if fully matches.
-	RemoveSlot(ctx context.Context, in *RemoveSlotRequest, opts ...grpc.CallOption) (*Empty, error)
-	// GetRegistredWorkers returns a list of Worker IDs that
+	SetDeviceProperties(ctx context.Context, in *SetDevicePropertiesRequest, opts ...grpc.CallOption) (*Empty, error)
+	// GetRegisteredWorkers returns a list of Worker IDs that
 	// allowed to connet to the Hub
-	GetRegistredWorkers(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetRegistredWorkersReply, error)
-	// RegisterWorker allows Worker with given ID
-	// to connect to the Hub
+	GetRegisteredWorkers(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetRegisteredWorkersReply, error)
+	// RegisterWorker adds Worker credentials to be able for them to connect
+	// to a Hub.
 	RegisterWorker(ctx context.Context, in *ID, opts ...grpc.CallOption) (*Empty, error)
-	// RegisterWorkers deny Worker with given ID
-	// to connect to the Hub
-	UnregisterWorker(ctx context.Context, in *ID, opts ...grpc.CallOption) (*Empty, error)
+	// DeregisterWorkers removed Worker credentials denying them to connect to
+	// a Hub.
+	DeregisterWorker(ctx context.Context, in *ID, opts ...grpc.CallOption) (*Empty, error)
+	// GetSlots allows to obtain previously assigned slots for the Hub.
+	Slots(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*SlotsReply, error)
+	// AddSlot allows to assign a new slot.
+	// This method can fail if either there are no such resources found or it
+	// has been previourly assigned.
+	InsertSlot(ctx context.Context, in *Slot, opts ...grpc.CallOption) (*Empty, error)
+	// RemoveSlot removes the speified slot if fully matches.
+	RemoveSlot(ctx context.Context, in *Slot, opts ...grpc.CallOption) (*Empty, error)
 }
 
 type hubClient struct {
@@ -631,63 +731,36 @@ func (c *hubClient) DiscoverHub(ctx context.Context, in *DiscoverHubRequest, opt
 	return out, nil
 }
 
-func (c *hubClient) GetMinerProperties(ctx context.Context, in *ID, opts ...grpc.CallOption) (*GetMinerPropertiesReply, error) {
-	out := new(GetMinerPropertiesReply)
-	err := grpc.Invoke(ctx, "/sonm.Hub/GetMinerProperties", in, out, c.cc, opts...)
+func (c *hubClient) Devices(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*DevicesReply, error) {
+	out := new(DevicesReply)
+	err := grpc.Invoke(ctx, "/sonm.Hub/Devices", in, out, c.cc, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *hubClient) SetMinerProperties(ctx context.Context, in *SetMinerPropertiesRequest, opts ...grpc.CallOption) (*Empty, error) {
+func (c *hubClient) GetDeviceProperties(ctx context.Context, in *ID, opts ...grpc.CallOption) (*GetDevicePropertiesReply, error) {
+	out := new(GetDevicePropertiesReply)
+	err := grpc.Invoke(ctx, "/sonm.Hub/GetDeviceProperties", in, out, c.cc, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hubClient) SetDeviceProperties(ctx context.Context, in *SetDevicePropertiesRequest, opts ...grpc.CallOption) (*Empty, error) {
 	out := new(Empty)
-	err := grpc.Invoke(ctx, "/sonm.Hub/SetMinerProperties", in, out, c.cc, opts...)
+	err := grpc.Invoke(ctx, "/sonm.Hub/SetDeviceProperties", in, out, c.cc, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *hubClient) GetSlots(ctx context.Context, in *ID, opts ...grpc.CallOption) (*GetSlotsReply, error) {
-	out := new(GetSlotsReply)
-	err := grpc.Invoke(ctx, "/sonm.Hub/GetSlots", in, out, c.cc, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *hubClient) GetAllSlots(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetAllSlotsReply, error) {
-	out := new(GetAllSlotsReply)
-	err := grpc.Invoke(ctx, "/sonm.Hub/GetAllSlots", in, out, c.cc, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *hubClient) AddSlot(ctx context.Context, in *AddSlotRequest, opts ...grpc.CallOption) (*Empty, error) {
-	out := new(Empty)
-	err := grpc.Invoke(ctx, "/sonm.Hub/AddSlot", in, out, c.cc, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *hubClient) RemoveSlot(ctx context.Context, in *RemoveSlotRequest, opts ...grpc.CallOption) (*Empty, error) {
-	out := new(Empty)
-	err := grpc.Invoke(ctx, "/sonm.Hub/RemoveSlot", in, out, c.cc, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *hubClient) GetRegistredWorkers(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetRegistredWorkersReply, error) {
-	out := new(GetRegistredWorkersReply)
-	err := grpc.Invoke(ctx, "/sonm.Hub/GetRegistredWorkers", in, out, c.cc, opts...)
+func (c *hubClient) GetRegisteredWorkers(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*GetRegisteredWorkersReply, error) {
+	out := new(GetRegisteredWorkersReply)
+	err := grpc.Invoke(ctx, "/sonm.Hub/GetRegisteredWorkers", in, out, c.cc, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -703,9 +776,36 @@ func (c *hubClient) RegisterWorker(ctx context.Context, in *ID, opts ...grpc.Cal
 	return out, nil
 }
 
-func (c *hubClient) UnregisterWorker(ctx context.Context, in *ID, opts ...grpc.CallOption) (*Empty, error) {
+func (c *hubClient) DeregisterWorker(ctx context.Context, in *ID, opts ...grpc.CallOption) (*Empty, error) {
 	out := new(Empty)
-	err := grpc.Invoke(ctx, "/sonm.Hub/UnregisterWorker", in, out, c.cc, opts...)
+	err := grpc.Invoke(ctx, "/sonm.Hub/DeregisterWorker", in, out, c.cc, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hubClient) Slots(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*SlotsReply, error) {
+	out := new(SlotsReply)
+	err := grpc.Invoke(ctx, "/sonm.Hub/Slots", in, out, c.cc, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hubClient) InsertSlot(ctx context.Context, in *Slot, opts ...grpc.CallOption) (*Empty, error) {
+	out := new(Empty)
+	err := grpc.Invoke(ctx, "/sonm.Hub/InsertSlot", in, out, c.cc, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hubClient) RemoveSlot(ctx context.Context, in *Slot, opts ...grpc.CallOption) (*Empty, error) {
+	out := new(Empty)
+	err := grpc.Invoke(ctx, "/sonm.Hub/RemoveSlot", in, out, c.cc, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -732,35 +832,36 @@ type HubServer interface {
 	TaskLogs(*TaskLogsRequest, Hub_TaskLogsServer) error
 	ProposeDeal(context.Context, *DealRequest) (*Empty, error)
 	DiscoverHub(context.Context, *DiscoverHubRequest) (*Empty, error)
-	// GetMinerProperties allows to obtain previously assigned resource
-	// properties for a given miner.
-	GetMinerProperties(context.Context, *ID) (*GetMinerPropertiesReply, error)
-	// SetMinerProperties method allows to specify additional resource
-	// properties for a miner specified by its ID.
+	// Devices returns list of all available devices that this Hub awares of
+	// with tieir full description.
+	Devices(context.Context, *Empty) (*DevicesReply, error)
+	// GetDeviceProperties allows to obtain previously assigned resource
+	// properties for a given device.
+	// TODO: Just string?
+	GetDeviceProperties(context.Context, *ID) (*GetDevicePropertiesReply, error)
+	// SetDeviceProperties method allows to specify additional resource
+	// properties for a device specified by its ID.
 	// This may include GPU's capability to execute a well-known work such as
 	// Ethereum mining etc.
 	// Note, that this method overrides all previously specified properties.
-	SetMinerProperties(context.Context, *SetMinerPropertiesRequest) (*Empty, error)
-	// GetSlots allows to obtain previously assigned slots from for a given
-	// miner.
-	GetSlots(context.Context, *ID) (*GetSlotsReply, error)
-	// GetAllSlots returns slots assigned on all Workers on the Hub
-	GetAllSlots(context.Context, *Empty) (*GetAllSlotsReply, error)
-	// AddSlot allows to assign a new slot for a given miner.
-	// This method can fail if either there are no resources left on a miner
-	// or it has been previourly assigned for specified time duration.
-	AddSlot(context.Context, *AddSlotRequest) (*Empty, error)
-	// RemoveSlot removes the speified slot if fully matches.
-	RemoveSlot(context.Context, *RemoveSlotRequest) (*Empty, error)
-	// GetRegistredWorkers returns a list of Worker IDs that
+	SetDeviceProperties(context.Context, *SetDevicePropertiesRequest) (*Empty, error)
+	// GetRegisteredWorkers returns a list of Worker IDs that
 	// allowed to connet to the Hub
-	GetRegistredWorkers(context.Context, *Empty) (*GetRegistredWorkersReply, error)
-	// RegisterWorker allows Worker with given ID
-	// to connect to the Hub
+	GetRegisteredWorkers(context.Context, *Empty) (*GetRegisteredWorkersReply, error)
+	// RegisterWorker adds Worker credentials to be able for them to connect
+	// to a Hub.
 	RegisterWorker(context.Context, *ID) (*Empty, error)
-	// RegisterWorkers deny Worker with given ID
-	// to connect to the Hub
-	UnregisterWorker(context.Context, *ID) (*Empty, error)
+	// DeregisterWorkers removed Worker credentials denying them to connect to
+	// a Hub.
+	DeregisterWorker(context.Context, *ID) (*Empty, error)
+	// GetSlots allows to obtain previously assigned slots for the Hub.
+	Slots(context.Context, *Empty) (*SlotsReply, error)
+	// AddSlot allows to assign a new slot.
+	// This method can fail if either there are no such resources found or it
+	// has been previourly assigned.
+	InsertSlot(context.Context, *Slot) (*Empty, error)
+	// RemoveSlot removes the speified slot if fully matches.
+	RemoveSlot(context.Context, *Slot) (*Empty, error)
 }
 
 func RegisterHubServer(s *grpc.Server, srv HubServer) {
@@ -986,128 +1087,74 @@ func _Hub_DiscoverHub_Handler(srv interface{}, ctx context.Context, dec func(int
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Hub_GetMinerProperties_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ID)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(HubServer).GetMinerProperties(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/sonm.Hub/GetMinerProperties",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(HubServer).GetMinerProperties(ctx, req.(*ID))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Hub_SetMinerProperties_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetMinerPropertiesRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(HubServer).SetMinerProperties(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/sonm.Hub/SetMinerProperties",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(HubServer).SetMinerProperties(ctx, req.(*SetMinerPropertiesRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Hub_GetSlots_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ID)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(HubServer).GetSlots(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/sonm.Hub/GetSlots",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(HubServer).GetSlots(ctx, req.(*ID))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Hub_GetAllSlots_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _Hub_Devices_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(Empty)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(HubServer).GetAllSlots(ctx, in)
+		return srv.(HubServer).Devices(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/sonm.Hub/GetAllSlots",
+		FullMethod: "/sonm.Hub/Devices",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(HubServer).GetAllSlots(ctx, req.(*Empty))
+		return srv.(HubServer).Devices(ctx, req.(*Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Hub_AddSlot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AddSlotRequest)
+func _Hub_GetDeviceProperties_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ID)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(HubServer).AddSlot(ctx, in)
+		return srv.(HubServer).GetDeviceProperties(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/sonm.Hub/AddSlot",
+		FullMethod: "/sonm.Hub/GetDeviceProperties",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(HubServer).AddSlot(ctx, req.(*AddSlotRequest))
+		return srv.(HubServer).GetDeviceProperties(ctx, req.(*ID))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Hub_RemoveSlot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RemoveSlotRequest)
+func _Hub_SetDeviceProperties_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetDevicePropertiesRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(HubServer).RemoveSlot(ctx, in)
+		return srv.(HubServer).SetDeviceProperties(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/sonm.Hub/RemoveSlot",
+		FullMethod: "/sonm.Hub/SetDeviceProperties",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(HubServer).RemoveSlot(ctx, req.(*RemoveSlotRequest))
+		return srv.(HubServer).SetDeviceProperties(ctx, req.(*SetDevicePropertiesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Hub_GetRegistredWorkers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _Hub_GetRegisteredWorkers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(Empty)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(HubServer).GetRegistredWorkers(ctx, in)
+		return srv.(HubServer).GetRegisteredWorkers(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/sonm.Hub/GetRegistredWorkers",
+		FullMethod: "/sonm.Hub/GetRegisteredWorkers",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(HubServer).GetRegistredWorkers(ctx, req.(*Empty))
+		return srv.(HubServer).GetRegisteredWorkers(ctx, req.(*Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1130,20 +1177,74 @@ func _Hub_RegisterWorker_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Hub_UnregisterWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _Hub_DeregisterWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ID)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(HubServer).UnregisterWorker(ctx, in)
+		return srv.(HubServer).DeregisterWorker(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/sonm.Hub/UnregisterWorker",
+		FullMethod: "/sonm.Hub/DeregisterWorker",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(HubServer).UnregisterWorker(ctx, req.(*ID))
+		return srv.(HubServer).DeregisterWorker(ctx, req.(*ID))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Hub_Slots_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HubServer).Slots(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/sonm.Hub/Slots",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HubServer).Slots(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Hub_InsertSlot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Slot)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HubServer).InsertSlot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/sonm.Hub/InsertSlot",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HubServer).InsertSlot(ctx, req.(*Slot))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Hub_RemoveSlot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Slot)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HubServer).RemoveSlot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/sonm.Hub/RemoveSlot",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HubServer).RemoveSlot(ctx, req.(*Slot))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1197,40 +1298,40 @@ var _Hub_serviceDesc = grpc.ServiceDesc{
 			Handler:    _Hub_DiscoverHub_Handler,
 		},
 		{
-			MethodName: "GetMinerProperties",
-			Handler:    _Hub_GetMinerProperties_Handler,
+			MethodName: "Devices",
+			Handler:    _Hub_Devices_Handler,
 		},
 		{
-			MethodName: "SetMinerProperties",
-			Handler:    _Hub_SetMinerProperties_Handler,
+			MethodName: "GetDeviceProperties",
+			Handler:    _Hub_GetDeviceProperties_Handler,
 		},
 		{
-			MethodName: "GetSlots",
-			Handler:    _Hub_GetSlots_Handler,
+			MethodName: "SetDeviceProperties",
+			Handler:    _Hub_SetDeviceProperties_Handler,
 		},
 		{
-			MethodName: "GetAllSlots",
-			Handler:    _Hub_GetAllSlots_Handler,
-		},
-		{
-			MethodName: "AddSlot",
-			Handler:    _Hub_AddSlot_Handler,
-		},
-		{
-			MethodName: "RemoveSlot",
-			Handler:    _Hub_RemoveSlot_Handler,
-		},
-		{
-			MethodName: "GetRegistredWorkers",
-			Handler:    _Hub_GetRegistredWorkers_Handler,
+			MethodName: "GetRegisteredWorkers",
+			Handler:    _Hub_GetRegisteredWorkers_Handler,
 		},
 		{
 			MethodName: "RegisterWorker",
 			Handler:    _Hub_RegisterWorker_Handler,
 		},
 		{
-			MethodName: "UnregisterWorker",
-			Handler:    _Hub_UnregisterWorker_Handler,
+			MethodName: "DeregisterWorker",
+			Handler:    _Hub_DeregisterWorker_Handler,
+		},
+		{
+			MethodName: "Slots",
+			Handler:    _Hub_Slots_Handler,
+		},
+		{
+			MethodName: "InsertSlot",
+			Handler:    _Hub_InsertSlot_Handler,
+		},
+		{
+			MethodName: "RemoveSlot",
+			Handler:    _Hub_RemoveSlot_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
@@ -1246,74 +1347,82 @@ var _Hub_serviceDesc = grpc.ServiceDesc{
 func init() { proto.RegisterFile("hub.proto", fileDescriptor2) }
 
 var fileDescriptor2 = []byte{
-	// 1098 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xb4, 0x57, 0x6d, 0x4f, 0xe3, 0x46,
-	0x10, 0x8e, 0xf3, 0x02, 0xc9, 0xe4, 0x78, 0x5b, 0x28, 0x67, 0xac, 0x1e, 0xc7, 0xf9, 0xaa, 0x96,
-	0x16, 0x11, 0xae, 0x94, 0xd2, 0x0a, 0xf5, 0x74, 0x45, 0x04, 0x71, 0xa8, 0x45, 0x20, 0xd3, 0x6b,
-	0xd5, 0x8f, 0x0e, 0x5e, 0x60, 0x45, 0xec, 0x75, 0xd7, 0xeb, 0x48, 0xf9, 0x27, 0x55, 0xff, 0x40,
-	0x7f, 0x40, 0xa5, 0xfb, 0xd2, 0x1f, 0x51, 0xa9, 0xbf, 0xa8, 0xda, 0x17, 0xdb, 0x6b, 0xe2, 0x70,
-	0xad, 0xaa, 0xfb, 0xe6, 0x9d, 0x9d, 0x79, 0xe6, 0x99, 0x79, 0x36, 0x33, 0x0a, 0x74, 0x6e, 0xd3,
-	0x41, 0x2f, 0x66, 0x94, 0x53, 0xd4, 0x4c, 0x68, 0x14, 0x3a, 0x9d, 0x01, 0x09, 0x94, 0xc1, 0x59,
-	0x20, 0x91, 0x30, 0x45, 0xc4, 0x57, 0x06, 0xf7, 0x0f, 0x0b, 0x3a, 0xdf, 0x93, 0x84, 0x7b, 0x38,
-	0x1e, 0x8e, 0xd1, 0x36, 0x34, 0x49, 0x74, 0x4d, 0x6d, 0x6b, 0xa3, 0xb1, 0xd9, 0xdd, 0x5d, 0xeb,
-	0x09, 0xdf, 0x5e, 0x7e, 0xdd, 0x3b, 0x8d, 0xae, 0xe9, 0x71, 0xc4, 0xd9, 0xd8, 0x93, 0x6e, 0xce,
-	0x73, 0x15, 0xfb, 0xa3, 0x3f, 0x4c, 0x31, 0x5a, 0x85, 0x99, 0x91, 0xf8, 0x48, 0x64, 0x74, 0xc7,
-	0xd3, 0x27, 0xc7, 0x83, 0x4e, 0x1e, 0x87, 0x16, 0xa1, 0x71, 0x87, 0xc7, 0xb6, 0xb5, 0x61, 0x6d,
-	0x76, 0x3c, 0xf1, 0x89, 0x76, 0xa0, 0x25, 0x1d, 0xed, 0xfa, 0x86, 0x55, 0x95, 0x33, 0x4f, 0xe0,
-	0x29, 0xbf, 0x83, 0xfa, 0xd7, 0x96, 0x7b, 0x0b, 0x8b, 0x3f, 0xf8, 0xc9, 0x9d, 0x87, 0x7f, 0x49,
-	0x09, 0xc3, 0x21, 0x8e, 0x78, 0x82, 0xbe, 0x81, 0x0e, 0xc3, 0x09, 0x4d, 0xd9, 0x95, 0xa4, 0x20,
-	0xc0, 0xd6, 0x15, 0x98, 0x72, 0x55, 0x57, 0x66, 0x88, 0x57, 0x04, 0x08, 0xf6, 0x21, 0x89, 0x30,
-	0x4b, 0xec, 0xba, 0x62, 0xaf, 0x4e, 0xee, 0x5f, 0x75, 0x58, 0x7e, 0x9d, 0x0e, 0x2e, 0xb9, 0xcf,
-	0x78, 0x96, 0x12, 0x27, 0x1c, 0x1d, 0xc0, 0x23, 0x66, 0x40, 0xe9, 0x84, 0xab, 0x66, 0x42, 0x23,
-	0x51, 0xc9, 0x17, 0x39, 0xd0, 0x66, 0xf8, 0x86, 0x24, 0x9c, 0x8d, 0x65, 0xd5, 0x1d, 0x2f, 0x3f,
-	0xa3, 0x15, 0x68, 0x91, 0xd0, 0xbf, 0xc1, 0x76, 0x43, 0x5e, 0xa8, 0x03, 0x42, 0xd0, 0xf4, 0x53,
-	0x7e, 0x6b, 0x37, 0xa5, 0x51, 0x7e, 0xa3, 0x8f, 0x60, 0xee, 0x22, 0x1d, 0x0c, 0xc9, 0xd5, 0x77,
-	0x78, 0xdc, 0xf7, 0xb9, 0x6f, 0xb7, 0xe4, 0x65, 0xd9, 0x88, 0x5c, 0x78, 0x74, 0x45, 0xc3, 0x90,
-	0xf0, 0xf3, 0xe8, 0x92, 0xd3, 0xd8, 0x9e, 0xd9, 0xb0, 0x36, 0xdb, 0x5e, 0xc9, 0x86, 0xf6, 0xa0,
-	0x81, 0xa3, 0x91, 0x3d, 0x2b, 0x45, 0x77, 0x55, 0x09, 0x15, 0x35, 0xf7, 0x8e, 0xa3, 0x91, 0x52,
-	0x5f, 0xb8, 0x3b, 0xfb, 0xd0, 0xce, 0x0c, 0x15, 0xb2, 0xae, 0x98, 0xb2, 0x76, 0x4c, 0xed, 0x5e,
-	0xc1, 0x52, 0x19, 0x5c, 0x3c, 0xbc, 0x79, 0xa8, 0x93, 0x40, 0xc7, 0xd7, 0x49, 0x20, 0x5a, 0x84,
-	0xa3, 0x20, 0xa6, 0x24, 0xe2, 0x5a, 0x90, 0xfc, 0xec, 0xfe, 0x6a, 0xc1, 0xbc, 0x42, 0xe0, 0x69,
-	0xa2, 0xc2, 0xd7, 0x01, 0xa4, 0x5e, 0x47, 0x34, 0x8d, 0xb8, 0x84, 0x69, 0x7a, 0x86, 0x45, 0xa8,
-	0x9b, 0xc6, 0x9c, 0x84, 0x8a, 0x4e, 0xd3, 0xd3, 0x27, 0x64, 0xc3, 0xec, 0x08, 0xb3, 0x84, 0xd0,
-	0x48, 0xf7, 0x3b, 0x3b, 0x0a, 0x02, 0xf1, 0xd0, 0xe7, 0xd7, 0x94, 0x85, 0xba, 0xeb, 0xf9, 0x59,
-	0x44, 0x61, 0x7e, 0x7b, 0x18, 0x04, 0x4c, 0xf7, 0x3c, 0x3b, 0xba, 0x2f, 0xa0, 0xdb, 0xc7, 0xfe,
-	0x30, 0x7b, 0x24, 0xcf, 0xa0, 0x45, 0x59, 0x80, 0x99, 0x7e, 0x1d, 0x5d, 0xd5, 0xda, 0x73, 0x61,
-	0xf2, 0xd4, 0x8d, 0xfb, 0xbb, 0x05, 0x8f, 0x4f, 0x30, 0x3f, 0x13, 0x5c, 0x2f, 0x18, 0x8d, 0x31,
-	0xe3, 0x04, 0xeb, 0xaa, 0xce, 0x00, 0xe2, 0xdc, 0xa4, 0x7f, 0x93, 0xdb, 0x0a, 0x63, 0x4a, 0x48,
-	0xaf, 0x38, 0x2b, 0xa5, 0x0c, 0x00, 0xe7, 0x25, 0x2c, 0xdc, 0xbb, 0xfe, 0x4f, 0xba, 0xfd, 0x69,
-	0xc1, 0xda, 0x65, 0x45, 0x5a, 0x55, 0xea, 0x3c, 0xd4, 0x4f, 0xfb, 0x99, 0x80, 0xa7, 0x7d, 0x74,
-	0x5e, 0xe2, 0x5e, 0x97, 0xdc, 0x77, 0x14, 0xf7, 0xa9, 0x20, 0xef, 0x93, 0xfd, 0x0e, 0xcc, 0x9d,
-	0x60, 0x7e, 0x39, 0xa4, 0x3c, 0x7f, 0x32, 0xcd, 0x64, 0x48, 0xb9, 0x6e, 0x2b, 0x68, 0x6a, 0x43,
-	0xca, 0x3d, 0x69, 0x77, 0xff, 0xb6, 0x60, 0xf1, 0x04, 0xf3, 0xc3, 0xe1, 0xd0, 0x08, 0xfa, 0x0a,
-	0x5a, 0xe2, 0x32, 0x13, 0xe3, 0x59, 0x2e, 0x46, 0xc9, 0x4d, 0xc2, 0xe8, 0x12, 0x94, 0xbf, 0xf3,
-	0x19, 0xb4, 0x85, 0x51, 0x0c, 0xb3, 0x77, 0x65, 0x76, 0x7e, 0x06, 0x28, 0x00, 0x2a, 0x8a, 0xfc,
-	0xb2, 0x3c, 0x31, 0x9f, 0x3e, 0x40, 0x42, 0x8e, 0x51, 0xa3, 0x0b, 0xdf, 0xc2, 0xfc, 0x61, 0x10,
-	0xc8, 0x5c, 0x53, 0x74, 0xcb, 0xc8, 0x29, 0xec, 0xc9, 0xb6, 0x1c, 0xc1, 0x92, 0x87, 0x43, 0x3a,
-	0xc2, 0xff, 0x07, 0x64, 0x1f, 0xec, 0x13, 0xcc, 0x3d, 0x35, 0xf3, 0x70, 0xf0, 0x13, 0x65, 0x77,
-	0x98, 0xe9, 0x16, 0x3b, 0xd0, 0x20, 0x41, 0xd6, 0xe0, 0xb6, 0x0a, 0x3d, 0xed, 0x7b, 0xc2, 0xe8,
-	0xbe, 0xad, 0xc3, 0x9c, 0x98, 0x19, 0xc5, 0xc2, 0xfa, 0xbc, 0xb4, 0xb0, 0x9e, 0x14, 0xe3, 0x77,
-	0xfa, 0xd2, 0xfa, 0xcd, 0x82, 0xb6, 0xf0, 0x10, 0x76, 0xf4, 0x12, 0x5a, 0xdc, 0x4f, 0xee, 0xb2,
-	0x7c, 0x9f, 0x54, 0x01, 0x64, 0xce, 0xf2, 0x23, 0x93, 0x55, 0x46, 0x39, 0xe7, 0x00, 0x85, 0xb1,
-	0x42, 0xaa, 0xad, 0xb2, 0x54, 0x1f, 0x14, 0xf0, 0xc6, 0xf4, 0x32, 0x04, 0x72, 0xde, 0x3c, 0xbc,
-	0x2c, 0x77, 0xcb, 0x78, 0x1f, 0x3e, 0x44, 0xd7, 0x80, 0xdd, 0x7d, 0xdb, 0x86, 0xc6, 0xeb, 0x74,
-	0x80, 0x3e, 0x86, 0xe6, 0x05, 0x89, 0x6e, 0x90, 0x9e, 0x44, 0xc7, 0x61, 0xcc, 0xc7, 0xce, 0x82,
-	0x3a, 0x88, 0x0b, 0x89, 0xe0, 0xd6, 0xd0, 0x36, 0xcc, 0x28, 0x82, 0x65, 0xcf, 0x15, 0x73, 0x37,
-	0x64, 0xf4, 0xdd, 0x9a, 0x80, 0x95, 0x2f, 0xbb, 0x0a, 0x36, 0x27, 0xe6, 0xd6, 0xd0, 0x73, 0x68,
-	0xca, 0xae, 0xe7, 0xb2, 0x66, 0x4e, 0x92, 0xaf, 0x76, 0xea, 0x29, 0x79, 0x26, 0x01, 0x97, 0x2b,
-	0xaa, 0x75, 0x6b, 0xe8, 0x10, 0x3a, 0xf9, 0x32, 0x41, 0x6b, 0x53, 0xb7, 0x97, 0xf3, 0xb8, 0xea,
-	0x2a, 0xe3, 0xd5, 0x16, 0x8b, 0x50, 0x22, 0x14, 0xdc, 0xcc, 0xe4, 0x6e, 0x0d, 0xed, 0x28, 0xad,
-	0x75, 0x5f, 0x0a, 0xb7, 0x6a, 0x51, 0x65, 0x40, 0x57, 0xce, 0xb9, 0x89, 0x08, 0xdd, 0x46, 0x65,
-	0x3f, 0xf3, 0xe3, 0x2c, 0xe0, 0x40, 0x57, 0x4e, 0x6f, 0x12, 0x64, 0xa0, 0x8a, 0x73, 0x56, 0xc4,
-	0x72, 0xd9, 0x7c, 0x74, 0x9b, 0x46, 0x77, 0x6e, 0xed, 0x85, 0x25, 0x92, 0x89, 0xf1, 0x48, 0x13,
-	0x2c, 0x16, 0x10, 0x5a, 0x52, 0x7e, 0xc6, 0x32, 0xba, 0x5f, 0xce, 0x3e, 0x74, 0xfb, 0x24, 0xb9,
-	0xa2, 0x23, 0xcc, 0xc4, 0xcb, 0xb0, 0x75, 0x40, 0x61, 0x9a, 0x12, 0xf7, 0x0a, 0xd0, 0xe4, 0xf2,
-	0x31, 0x8a, 0x7b, 0xf2, 0xe0, 0x82, 0x72, 0x6b, 0xa8, 0x0f, 0x68, 0x72, 0x03, 0xa0, 0xa7, 0xef,
-	0xd8, 0x0d, 0xf7, 0x69, 0x6c, 0x41, 0x3b, 0x9b, 0xe7, 0x46, 0xf2, 0xe5, 0x3c, 0x79, 0x31, 0x08,
-	0xdd, 0x1a, 0xda, 0x83, 0xae, 0x31, 0x1e, 0xcb, 0xaf, 0x6a, 0xb5, 0x7a, 0x7c, 0xca, 0x87, 0x38,
-	0xab, 0x87, 0x25, 0xd2, 0x8a, 0x95, 0x67, 0xe7, 0x7d, 0x4a, 0x7b, 0x00, 0xc5, 0x68, 0x44, 0xfa,
-	0xb9, 0x4d, 0x0c, 0xcb, 0xfb, 0x51, 0x7d, 0x58, 0xae, 0x98, 0x85, 0x65, 0x8e, 0xeb, 0x39, 0xc7,
-	0xca, 0x99, 0xe9, 0xd6, 0xd0, 0xa7, 0x30, 0xaf, 0xae, 0x30, 0x53, 0x37, 0xd3, 0xdf, 0xf1, 0x16,
-	0x2c, 0xbe, 0x89, 0xd8, 0xbf, 0x73, 0x1e, 0xcc, 0xc8, 0x7f, 0x09, 0x5f, 0xfc, 0x13, 0x00, 0x00,
-	0xff, 0xff, 0x1a, 0x0a, 0x20, 0x79, 0x54, 0x0c, 0x00, 0x00,
+	// 1232 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xb4, 0x57, 0x6d, 0x6f, 0x1b, 0x45,
+	0x10, 0xf6, 0xf9, 0x25, 0xb5, 0xc7, 0x79, 0x5d, 0x87, 0x72, 0x39, 0x41, 0x48, 0xaf, 0x88, 0xa4,
+	0xb4, 0x75, 0x43, 0x80, 0x16, 0x45, 0x54, 0x10, 0xc5, 0xa9, 0x6b, 0xd1, 0x12, 0xeb, 0x42, 0x40,
+	0x48, 0x7c, 0x39, 0xfb, 0x36, 0xc9, 0xca, 0xf6, 0xdd, 0xb1, 0xb7, 0x67, 0xc9, 0x7f, 0x82, 0xcf,
+	0x08, 0x89, 0x1f, 0xc0, 0x67, 0x24, 0xbe, 0xf1, 0x1b, 0x90, 0xf8, 0x45, 0x68, 0xdf, 0xee, 0xc5,
+	0x39, 0x27, 0xa0, 0x8a, 0x6f, 0x37, 0xb3, 0x33, 0xcf, 0xcc, 0xce, 0x33, 0xbb, 0xb3, 0x07, 0x8d,
+	0xab, 0x78, 0xd0, 0x0e, 0x69, 0xc0, 0x02, 0x54, 0x8d, 0x02, 0x7f, 0x62, 0x35, 0x06, 0xc4, 0x93,
+	0x0a, 0x0b, 0x0d, 0xdd, 0xd0, 0x1d, 0x90, 0x31, 0x61, 0x04, 0x47, 0x4a, 0xb7, 0x46, 0x7c, 0x6e,
+	0xe6, 0x13, 0x57, 0x2a, 0xec, 0xdf, 0x0d, 0x68, 0xbc, 0x22, 0x11, 0x73, 0x70, 0x38, 0x9e, 0xa1,
+	0xc7, 0x50, 0x25, 0xfe, 0x45, 0x60, 0x1a, 0x3b, 0x95, 0xbd, 0xe6, 0xc1, 0x56, 0x9b, 0xdb, 0xb6,
+	0x93, 0xe5, 0x76, 0xcf, 0xbf, 0x08, 0x4e, 0x7c, 0x46, 0x67, 0x8e, 0x30, 0xb3, 0xee, 0x4b, 0xdf,
+	0x6f, 0xdd, 0x71, 0x8c, 0xd1, 0x5d, 0x58, 0x9a, 0xf2, 0x8f, 0x48, 0x78, 0x37, 0x1c, 0x25, 0x59,
+	0x0e, 0x34, 0x12, 0x3f, 0xb4, 0x0e, 0x95, 0x11, 0x9e, 0x99, 0xc6, 0x8e, 0xb1, 0xd7, 0x70, 0xf8,
+	0x27, 0x7a, 0x02, 0x35, 0x61, 0x68, 0x96, 0x77, 0x8c, 0xa2, 0x98, 0x49, 0x00, 0x47, 0xda, 0x1d,
+	0x96, 0x3f, 0x33, 0xec, 0x2b, 0x58, 0xff, 0xc6, 0x8d, 0x46, 0x0e, 0xfe, 0x31, 0x26, 0x14, 0x4f,
+	0xb0, 0xcf, 0x22, 0xf4, 0x39, 0x34, 0x28, 0x8e, 0x82, 0x98, 0x0e, 0x45, 0x0a, 0x1c, 0x6c, 0x5b,
+	0x82, 0x49, 0x53, 0xb9, 0x94, 0x75, 0x71, 0x52, 0x07, 0x9e, 0xfd, 0x84, 0xf8, 0x98, 0x46, 0x66,
+	0x59, 0x66, 0x2f, 0x25, 0xfb, 0xaf, 0x32, 0xb4, 0x5e, 0xc6, 0x83, 0x33, 0xe6, 0x52, 0xa6, 0x43,
+	0xe2, 0x88, 0xa1, 0x43, 0x58, 0xa6, 0x19, 0x28, 0x15, 0xf0, 0x6e, 0x36, 0x60, 0x26, 0x50, 0xce,
+	0x16, 0x59, 0x50, 0xa7, 0xf8, 0x92, 0x44, 0x8c, 0xce, 0xc4, 0xae, 0x1b, 0x4e, 0x22, 0xa3, 0x4d,
+	0xa8, 0x91, 0x89, 0x7b, 0x89, 0xcd, 0x8a, 0x58, 0x90, 0x02, 0x42, 0x50, 0x75, 0x63, 0x76, 0x65,
+	0x56, 0x85, 0x52, 0x7c, 0xa3, 0xf7, 0x61, 0xa5, 0x1f, 0x0f, 0xc6, 0x64, 0xf8, 0x15, 0x9e, 0x75,
+	0x5c, 0xe6, 0x9a, 0x35, 0xb1, 0x98, 0x57, 0x22, 0x1b, 0x96, 0x87, 0xc1, 0x64, 0x42, 0xd8, 0xa9,
+	0x7f, 0xc6, 0x82, 0xd0, 0x5c, 0xda, 0x31, 0xf6, 0xea, 0x4e, 0x4e, 0x87, 0x3e, 0x81, 0x0a, 0xf6,
+	0xa7, 0xe6, 0x1d, 0x41, 0xba, 0x2d, 0xb7, 0x50, 0xb0, 0xe7, 0xf6, 0x89, 0x3f, 0x95, 0xec, 0x73,
+	0x73, 0xeb, 0x29, 0xd4, 0xb5, 0xa2, 0x80, 0xd6, 0xcd, 0x2c, 0xad, 0x8d, 0x2c, 0x77, 0x5f, 0xc0,
+	0x46, 0x1e, 0x9c, 0x37, 0xde, 0x2a, 0x94, 0x89, 0xa7, 0xfc, 0xcb, 0xc4, 0xe3, 0x25, 0xc2, 0xbe,
+	0x17, 0x06, 0xc4, 0x67, 0x8a, 0x90, 0x44, 0xb6, 0x7f, 0x36, 0x60, 0x55, 0x22, 0xb0, 0x38, 0x92,
+	0xee, 0xdb, 0x00, 0x82, 0xaf, 0xe3, 0x20, 0xf6, 0x99, 0x80, 0xa9, 0x3a, 0x19, 0x0d, 0x67, 0x37,
+	0x0e, 0x19, 0x99, 0xc8, 0x74, 0xaa, 0x8e, 0x92, 0x90, 0x09, 0x77, 0xa6, 0x98, 0x46, 0x24, 0xf0,
+	0x55, 0xbd, 0xb5, 0xc8, 0x13, 0x08, 0xc7, 0x2e, 0xbb, 0x08, 0xe8, 0x44, 0x55, 0x3d, 0x91, 0xb9,
+	0x17, 0x66, 0x57, 0x47, 0x9e, 0x47, 0x55, 0xcd, 0xb5, 0x68, 0xff, 0x00, 0xcd, 0x0e, 0x76, 0xc7,
+	0xba, 0x49, 0x36, 0xa1, 0x36, 0x20, 0x5e, 0x4f, 0x6f, 0x4c, 0x0a, 0x5c, 0xeb, 0x46, 0xa3, 0x9e,
+	0xa7, 0x4b, 0x23, 0x04, 0x74, 0x0f, 0x6a, 0x01, 0xf5, 0x30, 0x15, 0x89, 0x34, 0x0f, 0x9a, 0x92,
+	0x86, 0x53, 0xae, 0x72, 0xe4, 0x8a, 0xfd, 0x9b, 0x01, 0x66, 0x17, 0xb3, 0x0e, 0x9e, 0x92, 0x21,
+	0xee, 0xd3, 0x20, 0xc4, 0x94, 0x1f, 0x6d, 0x59, 0x82, 0xaf, 0x01, 0xc2, 0x44, 0xa5, 0x0e, 0x70,
+	0x5b, 0x82, 0x2c, 0xf2, 0x69, 0xa7, 0xb2, 0xe4, 0x35, 0x83, 0x60, 0x3d, 0x87, 0xb5, 0xb9, 0xe5,
+	0xdb, 0x58, 0x36, 0xb2, 0x2c, 0xff, 0x69, 0x80, 0x75, 0x56, 0x14, 0x57, 0x56, 0x66, 0x15, 0xca,
+	0xbd, 0x8e, 0xe6, 0xbb, 0xd7, 0x41, 0xfd, 0x5c, 0xf6, 0x65, 0x91, 0xfd, 0xbe, 0xcc, 0x7e, 0x31,
+	0xca, 0xff, 0x99, 0xff, 0x23, 0x80, 0xb3, 0x71, 0xc0, 0x92, 0xfe, 0xaa, 0x46, 0xe3, 0x80, 0xa9,
+	0xb2, 0x82, 0x4a, 0x6c, 0x1c, 0x30, 0x47, 0xe8, 0xed, 0xbf, 0x0d, 0x58, 0xef, 0x62, 0x76, 0x34,
+	0x1e, 0x67, 0x9c, 0x9e, 0x41, 0x8d, 0x2f, 0x6a, 0x32, 0xee, 0x25, 0x64, 0xe4, 0xcc, 0x04, 0x8c,
+	0xca, 0x5f, 0xda, 0x5b, 0x1f, 0x42, 0x9d, 0x2b, 0xf9, 0xcd, 0x77, 0x5b, 0x64, 0xeb, 0x7b, 0x95,
+	0xe7, 0xa2, 0x1d, 0x7e, 0x9a, 0xbf, 0x5e, 0xdf, 0xbb, 0x21, 0x09, 0x71, 0xe7, 0x66, 0x4a, 0xf0,
+	0x25, 0xac, 0x1e, 0x79, 0x9e, 0x88, 0xb5, 0x80, 0x35, 0x9d, 0x9c, 0xc4, 0xbe, 0x5e, 0x96, 0x63,
+	0xd8, 0x70, 0xf0, 0x24, 0x98, 0xe2, 0x37, 0x01, 0x79, 0x06, 0x5b, 0x5d, 0xcc, 0x1c, 0x71, 0x41,
+	0x62, 0x8a, 0xbd, 0xef, 0x02, 0x3a, 0xc2, 0x54, 0xd5, 0xd8, 0x82, 0x0a, 0xf1, 0x74, 0x85, 0xeb,
+	0xd2, 0xb7, 0xd7, 0x71, 0xb8, 0xd2, 0xfe, 0xa3, 0x0c, 0x2b, 0xfc, 0x86, 0x49, 0xc7, 0xdb, 0x47,
+	0xb9, 0xf1, 0xf6, 0x6e, 0x7a, 0x59, 0x2f, 0x1e, 0x71, 0xbf, 0x18, 0x50, 0xe7, 0x16, 0x5c, 0x8f,
+	0x9e, 0x43, 0x8d, 0xb9, 0xd1, 0x48, 0xc7, 0xdb, 0x2d, 0x02, 0xd0, 0xc6, 0xe2, 0x43, 0xf3, 0x2a,
+	0xbc, 0xac, 0x53, 0x80, 0x54, 0x59, 0xc0, 0xd5, 0xc3, 0x3c, 0x57, 0x6f, 0xa5, 0xf0, 0x99, 0xbb,
+	0x2e, 0xc3, 0x90, 0x75, 0x7e, 0xf3, 0x68, 0x3d, 0xc8, 0xe3, 0xbd, 0x73, 0x53, 0xba, 0x59, 0xe2,
+	0xfb, 0xb0, 0x72, 0xdc, 0x3f, 0x97, 0x87, 0x4e, 0xec, 0x3b, 0x1d, 0x8e, 0x46, 0x76, 0x38, 0xa2,
+	0x5d, 0x58, 0xf2, 0x84, 0x95, 0x8a, 0xb0, 0x26, 0x23, 0x24, 0xce, 0x8e, 0x5a, 0xe6, 0x88, 0xdd,
+	0x37, 0x41, 0xec, 0x5e, 0x43, 0xfc, 0xa9, 0x0c, 0xcb, 0x52, 0xa5, 0x3a, 0x61, 0x1f, 0xaa, 0xc7,
+	0xfd, 0x73, 0x4d, 0x8d, 0xda, 0x6b, 0xd6, 0x82, 0xa7, 0xa5, 0xf8, 0x10, 0x96, 0xdc, 0xa3, 0xcb,
+	0x3d, 0xca, 0x0b, 0x3d, 0xba, 0xa9, 0x07, 0xff, 0xb4, 0x5e, 0x41, 0x23, 0x01, 0x29, 0xa8, 0xf7,
+	0x83, 0x7c, 0xbd, 0x5b, 0x73, 0xd5, 0x98, 0x2b, 0x33, 0x47, 0xeb, 0xfe, 0x67, 0xb4, 0xee, 0x02,
+	0xb4, 0x83, 0x5f, 0xeb, 0x50, 0x79, 0x19, 0x0f, 0xd0, 0x07, 0x50, 0xed, 0x13, 0xff, 0x12, 0xa9,
+	0x01, 0x72, 0x32, 0x09, 0xd9, 0xcc, 0x52, 0x65, 0xe4, 0x0b, 0x62, 0x67, 0x76, 0x09, 0x3d, 0x86,
+	0x25, 0xd9, 0x55, 0x79, 0xcb, 0xcd, 0xec, 0xf8, 0xd7, 0x3d, 0x67, 0x97, 0x38, 0xac, 0xb8, 0x8f,
+	0x8a, 0x60, 0x93, 0x6e, 0xb2, 0x4b, 0xe8, 0x3e, 0x54, 0x05, 0xc1, 0xc9, 0x59, 0xd4, 0x46, 0x22,
+	0x5f, 0x65, 0xd4, 0x96, 0x67, 0xea, 0x3a, 0x60, 0xab, 0xa0, 0x45, 0xed, 0x12, 0x3a, 0x82, 0x46,
+	0xf2, 0x5e, 0x40, 0x5b, 0x0b, 0x1f, 0x28, 0xd6, 0xdb, 0x45, 0x4b, 0x3a, 0xaf, 0x3a, 0x7f, 0xeb,
+	0x08, 0x84, 0x34, 0xb7, 0x6c, 0x70, 0xbb, 0x84, 0x9e, 0xc8, 0x03, 0xaa, 0xea, 0x92, 0x9a, 0x15,
+	0x9f, 0x44, 0xe1, 0xd0, 0x7c, 0xcd, 0x1b, 0xf7, 0x9a, 0x87, 0x2a, 0xa3, 0xd4, 0xbf, 0x76, 0x43,
+	0xed, 0x70, 0xa8, 0x76, 0x1e, 0x5c, 0x46, 0x28, 0x83, 0xca, 0x65, 0xbd, 0x89, 0x56, 0x5e, 0x7d,
+	0x7c, 0x15, 0xfb, 0x23, 0xbb, 0xb4, 0x6f, 0xf0, 0x60, 0x7c, 0xa2, 0x05, 0x11, 0xe6, 0x6f, 0x0c,
+	0xb4, 0xa1, 0x1b, 0x36, 0x79, 0x6f, 0xcc, 0x6f, 0xe7, 0x29, 0x34, 0x3b, 0x24, 0x1a, 0x06, 0x53,
+	0x4c, 0x79, 0x67, 0x98, 0xca, 0x21, 0x55, 0x2d, 0xf0, 0x7b, 0x04, 0x77, 0xd4, 0x31, 0xc8, 0xb3,
+	0x83, 0xae, 0x1f, 0x11, 0x41, 0x4e, 0xab, 0xe0, 0x81, 0x91, 0xa9, 0xc5, 0xf6, 0xcd, 0xaf, 0x10,
+	0xbb, 0x84, 0x5e, 0x40, 0xab, 0x60, 0xca, 0xa3, 0x9d, 0xdb, 0x1e, 0x00, 0xf3, 0x89, 0xbf, 0x80,
+	0xcd, 0xa2, 0x51, 0x91, 0xdf, 0x45, 0x3a, 0x02, 0x8b, 0x67, 0x8a, 0x5d, 0x42, 0x0f, 0x60, 0x55,
+	0xaf, 0xc9, 0x95, 0xc5, 0x2d, 0xf3, 0x10, 0xd6, 0x3b, 0x98, 0xfe, 0x4b, 0xe3, 0x3d, 0xa8, 0x89,
+	0x99, 0x9b, 0x4f, 0x68, 0x3d, 0x1d, 0x79, 0x49, 0x06, 0xbb, 0x00, 0x3d, 0x3f, 0xc2, 0x94, 0x71,
+	0x2d, 0xca, 0x0c, 0xc5, 0x79, 0xc8, 0x5d, 0x80, 0x74, 0xc4, 0xde, 0x60, 0x38, 0x58, 0x12, 0xff,
+	0x7b, 0x1f, 0xff, 0x13, 0x00, 0x00, 0xff, 0xff, 0x6f, 0x94, 0x34, 0x3c, 0x32, 0x0e, 0x00, 0x00,
 }

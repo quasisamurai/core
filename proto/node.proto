@@ -1,5 +1,6 @@
 syntax = "proto3";
 
+import "bid.proto";
 import "insonmnia.proto";
 import "miner.proto";
 import "hub.proto";
@@ -75,30 +76,34 @@ service HubManagement {
     // WorkersStatus produces a detailed info about a Worker with given ID
     rpc WorkerStatus (ID) returns (InfoReply) {}
 
-    // GetRegistredWorkers produce a list of Workers IDs allowed
+    // GetRegisteredWorkers produce a list of Workers IDs allowed
     // to connect to this hub
-    rpc GetRegistredWorkers(Empty) returns (GetRegistredWorkersReply) {}
+    rpc GetRegisteredWorkers(Empty) returns (GetRegisteredWorkersReply) {}
     // RegisterWorkers allows Worker with given ID connect to Hub
     rpc RegisterWorker (ID) returns (Empty) {}
-    // RegisterWorkers deny Worker with given ID connect to Hub
-    rpc UnregisterWorker (ID) returns (Empty) {}
+    // DeregisterWorkers deny Worker with given ID connect to Hub
+    rpc DeregisterWorker (ID) returns (Empty) {}
 
-    // GetMinerProperties allows to obtain previously assigned resource
-    // properties for a given miner
-    rpc GetWorkerProperties(ID) returns (GetMinerPropertiesReply) {}
-    // SetMinerProperties method allows to specify additional resource
-    // properties for a miner specified by its ID
-    // Note, that this method overrides all previously specified properties.
-    rpc SetWorkerProperties(SetMinerPropertiesRequest) returns (Empty) {}
+    // Devices returns list of all available devices that this Hub awares of
+    // with tieir full description.
+    rpc DeviceList(Empty) returns (DevicesReply) {}
+    // GetDeviceProperties allows to obtain previously assigned resource
+    // properties for a given device.
+    rpc GetDeviceProperties(ID) returns (GetDevicePropertiesReply) {}
+    // SetDeviceProperties method allows to specify additional resource
+    // properties for a device specified by its ID.
+    // This may include GPU's capability to execute a well-known work such as
+    // Ethereum mining etc.
+    rpc SetDeviceProperties(SetDevicePropertiesRequest) returns (Empty) {}
 
     // GetAskPlans allows to obtain previously assigned Ask Plans from for a given worker.
-    rpc GetAskPlans(Empty) returns (GetAllSlotsReply) {}
+    rpc GetAskPlans(Empty) returns (SlotsReply) {}
     // CreateAskPlan allows to create rules
     // for creating Ask orders on Marketplace
-    rpc CreateAskPlan(AddSlotRequest) returns (Empty) {}
+    rpc CreateAskPlan(Slot) returns (Empty) {}
     // RemoveAskPlan allows to remove rules
     // for creating Ask orders on Marketplace
-    rpc RemoveAskPlan(ID) returns (Empty) {}
+    rpc RemoveAskPlan(Slot) returns (Empty) {}
 
     // List produces a list of all running tasks on the Hub
     rpc TaskList(Empty) returns (TaskListReply) {}

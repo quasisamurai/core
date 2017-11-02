@@ -39,7 +39,7 @@ rating:
 resources:
   cpu_cores: 1
   ram_bytes: 100000000
-  gpu_count: 2
+  gpu_count: SINGLE_GPU
   storage: 2000000000
 
   network:
@@ -62,7 +62,7 @@ resources:
 	assert.Equal(t, int64(42), ss.SupplierRating)
 	assert.Equal(t, uint64(1), ss.Resources.CpuCores)
 	assert.Equal(t, uint64(100000000), ss.Resources.RamBytes)
-	assert.Equal(t, uint64(2), ss.Resources.GpuCount)
+	assert.Equal(t, pb.GPUCount_SINGLE_GPU, ss.Resources.GpuCount)
 	assert.Equal(t, uint64(2000000000), ss.Resources.Storage)
 	assert.Equal(t, uint64(100), ss.Resources.NetTrafficIn)
 	assert.Equal(t, uint64(200), ss.Resources.NetTrafficOut)
@@ -87,7 +87,7 @@ slot:
   resources:
     cpu_cores: 2
     ram_bytes: 100000000
-    gpu_count: 1
+    gpu_count: MULTIPLE_GPU
     storage: 2000000000
 
     network:
@@ -111,7 +111,7 @@ slot:
 
 func TestLoadPropsYaml(t *testing.T) {
 	p, err := createTestYamlFile(`
-foo: bar
+foo: 3.14
 cycles: 42`)
 	assert.NoError(t, err)
 	defer deleteTestYamlFile(p)
@@ -121,6 +121,6 @@ cycles: 42`)
 
 	assert.Contains(t, props, "foo")
 	assert.Contains(t, props, "cycles")
-	assert.Equal(t, "bar", props["foo"])
-	assert.Equal(t, "42", props["cycles"])
+	assert.Equal(t, 3.14, props["foo"])
+	assert.Equal(t, 42.0, props["cycles"])
 }

@@ -4,13 +4,18 @@ import (
 	"time"
 
 	"encoding/json"
+	"io/ioutil"
+
+	"github.com/sonm-io/core/cmd/cli/task_config"
 	pb "github.com/sonm-io/core/proto"
 	"github.com/spf13/cobra"
 	"golang.org/x/net/context"
+	"gopkg.in/yaml.v2"
 )
 
 func init() {
-	hubRootCmd.AddCommand(hubPingCmd, hubStatusCmd)
+	hubRootCmd.AddCommand(hubPingCmd, hubStatusCmd, hubSlotCmd)
+	hubSlotCmd.AddCommand(minerShowSlotsCmd, hubAddSlotCmd)
 }
 
 // --- hub commands
@@ -60,7 +65,6 @@ func hubPingCmdRunner(cmd *cobra.Command, interactor CliInteractor) {
 }
 
 func hubStatusCmdRunner(cmd *cobra.Command, interactor CliInteractor) {
-	// todo: implement this on hub
 	stat, err := interactor.HubStatus(context.Background())
 	if err != nil {
 		showError(cmd, "Cannot get status", err)
@@ -68,6 +72,75 @@ func hubStatusCmdRunner(cmd *cobra.Command, interactor CliInteractor) {
 	}
 
 	printHubStatus(cmd, stat)
+}
+
+var hubSlotCmd = &cobra.Command{
+	Use:     "slot",
+	Short:   "Show hub's virtual slots",
+	PreRunE: checkHubAddressIsSet,
+}
+
+var minerShowSlotsCmd = &cobra.Command{
+	Use:     "show",
+	Short:   "Show hub's virtual slots",
+	Args:    cobra.MaximumNArgs(0),
+	PreRunE: checkHubAddressIsSet,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		grpc, err := NewGrpcInteractor(hubAddress, timeout)
+		if err != nil {
+			return err
+		}
+
+		slots, err := grpc.HubShowSlots(context.Background())
+		if err != nil {
+			return err
+		}
+
+		dump, err := json.Marshal(slots.Slot)
+		if err != nil {
+			return err
+		}
+		cmd.Println(string(dump))
+		return nil
+	},
+}
+
+var hubAddSlotCmd = &cobra.Command{
+	Use:     "add PATH",
+	Short:   "Add a virtual slot",
+	PreRunE: checkHubAddressIsSet,
+	Args:    cobra.MinimumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path := args[0]
+
+		buf, err := ioutil.ReadFile(path)
+		if err != nil {
+			return err
+		}
+
+		cfg := task_config.SlotConfig{}
+		err = yaml.Unmarshal(buf, &cfg)
+		if err != nil {
+			return err
+		}
+
+		grpc, err := NewGrpcInteractor(hubAddress, timeout)
+		if err != nil {
+			return err
+		}
+		slot, err := cfg.IntoSlot()
+		if err != nil {
+			return err
+		}
+
+		_, err = grpc.HubInsertSlot(context.Background(), slot)
+		if err != nil {
+			return err
+		}
+
+		cmd.Println("OK")
+		return nil
+	},
 }
 
 func printHubStatus(cmd *cobra.Command, stat *pb.HubStatusReply) {

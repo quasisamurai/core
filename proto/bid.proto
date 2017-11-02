@@ -1,7 +1,5 @@
 syntax = "proto3";
 
-import "insonmnia.proto";
-
 package sonm;
 
 enum OrderType {
@@ -14,6 +12,12 @@ enum NetworkType {
     NO_NETWORK = 0;
     OUTBOUND = 1;
     INCOMING = 2;
+}
+
+enum GPUCount {
+    NO_GPU = 0;
+    SINGLE_GPU = 1;
+    MULTIPLE_GPU = 2;
 }
 
 // Geo represent GeoIP results for node
@@ -30,7 +34,7 @@ message Resources {
     // RAM, in bytes
     uint64 ramBytes = 2;
     // GPU devices count
-    uint64 gpuCount = 3;
+    GPUCount gpuCount = 3;
     // todo: discuss
     // storage volume, in Megabytes
     uint64 storage = 4;
@@ -48,18 +52,14 @@ message Resources {
 // todo(all): extra discuss required
 
 message Slot {
-    // Virtual computer start of life (hour grained).
-    Timestamp startTime = 1;
-    // Virtual computer end of life (hour grained).
-    Timestamp endTime = 2;
     // Buyer’s rating. Got from Buyer’s profile for BID orders rating_supplier.
-    int64 buyerRating = 3;
+    int64 buyerRating = 1;
     // Supplier’s rating. Got from Supplier’s profile for ASK orders.
-    int64 supplierRating = 4;
+    int64 supplierRating = 2;
     // Geo represent Worker's position
-    Geo geo = 5;
+    Geo geo = 3;
     // Hardware resources requirements
-    Resources resources = 6;
+    Resources resources = 4;
 }
 
 message Order {
