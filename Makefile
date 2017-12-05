@@ -7,7 +7,7 @@ GOCMD=./cmd
 ifeq ($(GO), )
     GO=go
 endif
-INSTALLDIR=${GOPATH}/bin
+INSTALLDIR=${GOPATH}/bin/
 
 BOOTNODE=sonmbootnode
 MINER=sonmminer
@@ -24,9 +24,18 @@ ifeq ($(GPU_SUPPORT),true)
     TAGS+=cl
 endif
 
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Linux)
+SED=sed -i 's/github\.com\/sonm-io\/core\/vendor\///g' insonmnia/node/hub_mock.go
+endif
+
+ifeq ($(UNAME_S),Darwin)
+SED=sed -i "" 's/github\.com\/sonm-io\/core\/vendor\///g' insonmnia/node/hub_mock.go
+endif
+
 .PHONY: fmt vet test
 
-all: mock vet fmt build test install
+all: mock vet fmt build test
 
 build/locator:
 	@echo "+ $@"
@@ -58,7 +67,12 @@ build/node:
 
 build/cli_win32:
 	@echo "+ $@"
-	GOOS=windows GOARCH=386 go build -tags nocgo -ldflags "-s -X github.com/sonm-io/core/cmd/cli/commands.version=$(FULL_VER).win32" -o ${CLI}_win32.exe ${GOCMD}/cli
+	GOOS=windows GOARCH=386 ${GO} build -tags "$(TAGS)" -ldflags "-s -X github.com/sonm-io/core/cmd/cli/commands.version=$(FULL_VER).win32" -o ${CLI}_win32.exe ${GOCMD}/cli
+
+build/node_win32:
+	@echo "+ $@"
+	GOOS=windows GOARCH=386 ${GO} build -tags "$(TAGS)" -ldflags "-s -X main.version=$(FULL_VER).win32" -o ${LOCAL_NODE}_win32.exe ${GOCMD}/node
+
 
 build/insomnia: build/hub build/miner build/cli build/node
 
@@ -68,22 +82,27 @@ build: build/bootnode build/insomnia build/aux
 
 install/bootnode: build/bootnode
 	@echo "+ $@"
+	mkdir -p ${INSTALLDIR}
 	cp ${BOOTNODE} ${INSTALLDIR}
 
 install/miner: build/miner
 	@echo "+ $@"
+	mkdir -p ${INSTALLDIR}
 	cp ${MINER} ${INSTALLDIR}
 
 install/hub: build/hub
 	@echo "+ $@"
+	mkdir -p ${INSTALLDIR}
 	cp ${HUB} ${INSTALLDIR}
 
 install/cli: build/cli
 	@echo "+ $@"
+	mkdir -p ${INSTALLDIR}
 	cp ${CLI} ${INSTALLDIR}
 
 install/node: build/node
 	@echo "+ $@"
+	mkdir -p ${INSTALLDIR}
 	cp ${LOCAL_NODE} ${INSTALLDIR}
 
 install: install/bootnode install/miner install/hub install/cli
@@ -117,9 +136,19 @@ mock:
 	mockgen -package miner -destination insonmnia/miner/overseer_mock.go -source insonmnia/miner/overseer.go
 	mockgen -package miner -destination insonmnia/miner/config_mock.go -source insonmnia/miner/config.go
 	mockgen -package hardware -destination insonmnia/hardware/hardware_mock.go -source insonmnia/hardware/hardware.go
-	mockgen -package config -destination cmd/cli/config/config_mock.go  -source cmd/cli/config/config.go
 	mockgen -package commands -destination cmd/cli/commands/interactor_mock.go  -source cmd/cli/commands/interactor.go
 	mockgen -package task_config -destination cmd/cli/task_config/config_mock.go  -source cmd/cli/task_config/config.go
+	mockgen -package accounts -destination accounts/keys_mock.go  -source accounts/keys.go
+	mockgen -package blockchain -destination blockchain/api_mock.go  -source blockchain/api.go
+	mockgen -package sonm -destination proto/locator_mock.go  -source proto/locator.pb.go
+	mockgen -package sonm -destination proto/marketplace_mock.go  -source proto/marketplace.pb.go
+	mockgen -package hub -destination insonmnia/hub/cluster_mock.go  -source insonmnia/hub/cluster.go
+	mockgen -package config -destination cmd/cli/config/config_mock.go  -source cmd/cli/config/config.go \
+		-aux_files accounts=accounts/keys.go
+	mockgen -package node -destination insonmnia/node/config_mock.go -source insonmnia/node/config.go \
+		-aux_files accounts=accounts/keys.go
+	mockgen -imports "context=golang.org/x/net/context" -package node -destination insonmnia/node/hub_mock.go \
+		"github.com/sonm-io/core/proto" HubClient && ${SED}
 
 clean:
 	rm -f ${MINER} ${HUB} ${CLI} ${BOOTNODE} ${MARKET}

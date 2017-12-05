@@ -10,6 +10,7 @@ service Miner{
     rpc Info(Empty) returns (InfoReply) {}
     rpc Handshake(MinerHandshakeRequest) returns (MinerHandshakeReply) {}
 
+    rpc Load(stream Chunk) returns (stream Progress) {}
     rpc Start(MinerStartRequest) returns (MinerStartReply) {}
     rpc Stop(ID) returns (Empty) {}
 
@@ -48,24 +49,35 @@ message MinerStartRequest{
     string image = 3;
     string auth = 4;
     ContainerRestartPolicy restartPolicy = 5;
-    TaskResourceRequirements usage = 6;
+    TaskResourceRequirements resources = 6;
     string PublicKeyData = 7;
     bool commitOnStop = 8;
     map<string, string> env = 9;
+    // OrderId describes an unique order identifier.
+    // It is here for proper resource allocation and limitation.
+    string orderId = 10;
+}
+
+message SocketAddr {
+    string addr = 1;
+    //
+    // Actually an `uint16` here. Protobuf is so clear and handy.
+    uint32 port = 2;
 }
 
 message MinerStartReply {
     string container = 1;
-    message port {
-        string IP = 1;
-        string port = 2;
-    }
-    map<string, port> Ports = 2;
+    repeated Route routes = 2;
 }
 
 message TaskInfo {
     MinerStartRequest request = 1;
     MinerStartReply reply = 2;
+}
+
+message Route {
+    string port = 1;
+    SocketAddr endpoint = 2;
 }
 
 message MinerStatusMapRequest {}

@@ -18,11 +18,13 @@ import (
 
 func defaultMockCfg(mock *gomock.Controller) *MockConfig {
 	cfg := NewMockConfig(mock)
-	cfg.EXPECT().HubEndpoint().AnyTimes().Return("::1")
+	cfg.EXPECT().HubEndpoint().AnyTimes().Return("0x0@::1")
 	cfg.EXPECT().HubResources().AnyTimes()
 	cfg.EXPECT().Firewall().AnyTimes()
 	cfg.EXPECT().GPU().AnyTimes()
 	cfg.EXPECT().SSH().AnyTimes()
+	cfg.EXPECT().ETH().AnyTimes().Return(&EthConfig{PrivateKey: "d07fff36ef2c3d15144974c25d3f5c061ae830a81eefd44292588b3cea2c701c"})
+	cfg.EXPECT().PublicIPs().AnyTimes().Return([]string{"192.168.70.17", "46.148.198.133"})
 	return cfg
 }
 
@@ -38,8 +40,8 @@ func TestServerNewExtractsHubEndpoint(t *testing.T) {
 	m, err := builder.Build()
 	cfg.EXPECT().GPU().AnyTimes()
 
+	assert.NoError(t, err)
 	assert.NotNil(t, m)
-	assert.Nil(t, err)
 	assert.Equal(t, "::1", m.hubAddress)
 }
 
@@ -151,20 +153,20 @@ func TestMinerStart(t *testing.T) {
 
 	ovs := NewMockOverseer(mock)
 	ovs.EXPECT().Spool(gomock.Any(), gomock.Any()).AnyTimes().Return(nil)
-	status_chan := make(chan pb.TaskStatusReply_Status)
+	statusChan := make(chan pb.TaskStatusReply_Status)
 	info := ContainerInfo{
 		status: &pb.TaskStatusReply{Status: pb.TaskStatusReply_RUNNING},
 		ID:     "deadbeef-cafe-dead-beef-cafedeadbeef",
 	}
-	ovs.EXPECT().Start(gomock.Any(), gomock.Any()).Times(1).Return(status_chan, info, nil)
+	ovs.EXPECT().Start(gomock.Any(), gomock.Any()).Times(1).Return(statusChan, info, nil)
 
 	builder := MinerBuilder{}
 	m, err := builder.Config(cfg).Overseer(ovs).Build()
 	require.NotNil(t, m)
 	require.Nil(t, err)
-	reply, err := m.Start(context.Background(), &pb.MinerStartRequest{Id: "test"})
+	reply, err := m.Start(context.Background(), &pb.MinerStartRequest{Id: "test", Resources: &pb.TaskResourceRequirements{}})
+	require.NoError(t, err)
 	require.NotNil(t, reply)
-	require.Nil(t, err)
 
 	id, ok := m.getTaskIdByContainerId("deadbeef-cafe-dead-beef-cafedeadbeef")
 	assert.True(t, ok)
@@ -179,10 +181,10 @@ func TestTransformEnvVars(t *testing.T) {
 		"key4": "",
 	}
 
-	transformed := transformEnvVariables(vars)
+	description := Description{Env: vars}
 
-	assert.Contains(t, transformed, "KEY1=value1")
-	assert.Contains(t, transformed, "KEY2=VALUE2")
-	assert.Contains(t, transformed, "KEY3=12345")
-	assert.Contains(t, transformed, "KEY4=")
+	assert.Contains(t, description.FormatEnv(), "KEY1=value1")
+	assert.Contains(t, description.FormatEnv(), "KEY2=VALUE2")
+	assert.Contains(t, description.FormatEnv(), "KEY3=12345")
+	assert.Contains(t, description.FormatEnv(), "KEY4=")
 }

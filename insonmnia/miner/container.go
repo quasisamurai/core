@@ -14,6 +14,7 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/gliderlabs/ssh"
 	log "github.com/noxiouz/zapctx/ctxlog"
+	"github.com/sonm-io/core/insonmnia/miner/gpu"
 )
 
 type containerDescriptor struct {
@@ -27,7 +28,7 @@ type containerDescriptor struct {
 	stats       types.StatsJSON
 }
 
-func newContainer(ctx context.Context, dockerClient *client.Client, d Description, tuner nvidiaGPUTuner) (*containerDescriptor, error) {
+func newContainer(ctx context.Context, dockerClient *client.Client, d Description, tuner gpu.Tuner) (*containerDescriptor, error) {
 	log.G(ctx).Info("start container with application")
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -47,7 +48,7 @@ func newContainer(ctx context.Context, dockerClient *client.Client, d Descriptio
 		Image: filepath.Join(d.Registry, d.Image),
 		// TODO: set actual name
 		Labels:  map[string]string{overseerTag: ""},
-		Env:     d.Env,
+		Env:     d.FormatEnv(),
 		Volumes: make(map[string]struct{}),
 	}
 
@@ -65,7 +66,7 @@ func newContainer(ctx context.Context, dockerClient *client.Client, d Descriptio
 		Resources: container.Resources{
 			// TODO: accept a name of a cgroup cooked by user
 			// NOTE: on non-Linux platform it's empty
-			CgroupParent: parentCgroup,
+			CgroupParent: d.Resources.CgroupParent,
 			Memory:       d.Resources.Memory,
 			NanoCPUs:     d.Resources.NanoCPUs,
 		},
@@ -180,7 +181,7 @@ func (c *containerDescriptor) upload() error {
 	if err != nil {
 		return err
 	}
-	log.G(c.ctx).Info("commited container", zap.String("id", c.ID), zap.String("newId", resp.ID))
+	log.G(c.ctx).Info("committed container", zap.String("id", c.ID), zap.String("newId", resp.ID))
 
 	image := filepath.Join(c.description.Registry, c.description.Image)
 	named, err := reference.ParseNormalizedNamed(image)

@@ -1,10 +1,12 @@
 package main
 
 import (
+	"log"
+
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/sonm-io/core/accounts"
 	"github.com/sonm-io/core/blockchain"
-	"log"
-	"math/big"
+	"github.com/sonm-io/core/proto"
 )
 
 const testPass = ""
@@ -12,7 +14,7 @@ const testPass = ""
 func main() {
 	var err error
 
-	ks := accounts.NewIdentity(accounts.GetDefaultKeystoreDir())
+	ks := accounts.NewIdentity("sonm-test-keystore")
 
 	err = ks.Open(testPass)
 	if err != nil {
@@ -30,25 +32,41 @@ func main() {
 		log.Fatal(err)
 	}
 
-	bch, err := blockchain.NewBlockchainAPI(prv, nil)
+	bch, err := blockchain.NewAPI(nil, nil)
 	if err != nil {
 		log.Fatal(bch)
 		return
 	}
 
-	tx, err := bch.OpenDeal("0x41ba7e0e1e661f7114f2f05afd2536210c2ed351", "0x41ba7e0e1e661f7114f2f05afd2536210c2ed351", big.NewInt(1236782361542612), big.NewInt(10000), big.NewInt(3600))
-	if err != nil {
-		log.Fatalln(err)
-		return
-	}
+	var tx *types.Transaction
 
-	//tx, err := bch.AcceptDeal(*big.NewInt(3))
+	//tx, err = bch.Approve(prv, tsc.DealsAddress, big.NewInt(10000))
 	//if err != nil {
 	//	log.Fatalln(err)
 	//	return
 	//}
 
-	//tx, err := bch.CloseDeal(big.NewInt(4))
+	deal := sonm.Deal{
+		BuyerID:           "0x41ba7e0e1e661f7114f2f05afd2536210c2ed351",
+		SupplierID:        "0x41ba7e0e1e661f7114f2f05afd2536210c2ed352",
+		SpecificationHash: "1234567890",
+		Price:             "10000",
+		WorkTime:          60,
+	}
+
+	tx, err = bch.OpenDeal(prv, &deal)
+	if err != nil {
+		log.Fatalln(err)
+		return
+	}
+
+	//tx, err := bch.AcceptDeal(prv, big.NewInt(2))
+	//if err != nil {
+	//	log.Fatalln(err)
+	//	return
+	//}
+
+	//tx, err = bch.CloseDeal(prv, big.NewInt(1))
 	//if err != nil {
 	//	log.Fatalln(err)
 	//	return

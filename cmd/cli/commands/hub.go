@@ -30,7 +30,7 @@ var hubPingCmd = &cobra.Command{
 	Short:   "Ping the hub",
 	PreRunE: checkHubAddressIsSet,
 	Run: func(cmd *cobra.Command, args []string) {
-		itr, err := NewGrpcInteractor(hubAddress, timeout)
+		itr, err := NewGrpcInteractor(hubAddressFlag, timeoutFlag)
 		if err != nil {
 			showError(cmd, "Cannot connect to hub", err)
 			return
@@ -44,7 +44,7 @@ var hubStatusCmd = &cobra.Command{
 	Short:   "Show hub status",
 	PreRunE: checkHubAddressIsSet,
 	Run: func(cmd *cobra.Command, args []string) {
-		itr, err := NewGrpcInteractor(hubAddress, timeout)
+		itr, err := NewGrpcInteractor(hubAddressFlag, timeoutFlag)
 		if err != nil {
 			showError(cmd, "Cannot connect to hub", err)
 			return
@@ -86,7 +86,7 @@ var minerShowSlotsCmd = &cobra.Command{
 	Args:    cobra.MaximumNArgs(0),
 	PreRunE: checkHubAddressIsSet,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		grpc, err := NewGrpcInteractor(hubAddress, timeout)
+		grpc, err := NewGrpcInteractor(hubAddressFlag, timeoutFlag)
 		if err != nil {
 			return err
 		}
@@ -96,7 +96,7 @@ var minerShowSlotsCmd = &cobra.Command{
 			return err
 		}
 
-		dump, err := json.Marshal(slots.Slot)
+		dump, err := json.Marshal(slots.GetSlots())
 		if err != nil {
 			return err
 		}
@@ -106,12 +106,13 @@ var minerShowSlotsCmd = &cobra.Command{
 }
 
 var hubAddSlotCmd = &cobra.Command{
-	Use:     "add PATH",
+	Use:     "add PRICE PATH",
 	Short:   "Add a virtual slot",
 	PreRunE: checkHubAddressIsSet,
-	Args:    cobra.MinimumNArgs(1),
+	Args:    cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		path := args[0]
+		price := args[0]
+		path := args[1]
 
 		buf, err := ioutil.ReadFile(path)
 		if err != nil {
@@ -124,7 +125,7 @@ var hubAddSlotCmd = &cobra.Command{
 			return err
 		}
 
-		grpc, err := NewGrpcInteractor(hubAddress, timeout)
+		grpc, err := NewGrpcInteractor(hubAddressFlag, timeoutFlag)
 		if err != nil {
 			return err
 		}
@@ -133,12 +134,12 @@ var hubAddSlotCmd = &cobra.Command{
 			return err
 		}
 
-		_, err = grpc.HubInsertSlot(context.Background(), slot)
+		id, err := grpc.HubInsertSlot(context.Background(), slot, price)
 		if err != nil {
 			return err
 		}
 
-		cmd.Println("OK")
+		cmd.Printf("id = %s\r\n", id.Id)
 		return nil
 	},
 }

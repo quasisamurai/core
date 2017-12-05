@@ -1,21 +1,22 @@
-# Hub settings. Optional.
+# Hub settings.
 hub:
-  # Endpoint for hub communication, optional param
-  # Can be omitted, in this case a discovery mechanism is activated.
-  # format is "ip:port"
-   endpoint: "127.0.0.1:10002"
+  # Endpoint for hub communication
+  # Format is "ethAddr@ip:port".
+   endpoint: 1c54f43a8ec76C15162CC80f31Cf02aE4cd31727@127.0.0.1:10002
 
   # Resources section is available only on Linux
   # If configured, all tasks will share this pool of resources.
   # This pool is a parent control group.
   # Format is Open Container Initiative Runtime Specification:
-  # resources:
-  # https://github.com/opencontainers/runtime-spec/blob/master/config-linux.md#memory
-  #     memory: { limit: 1000 }
-  # https://github.com/opencontainers/runtime-spec/blob/master/config-linux.md#cpu
-  #     cpu: {quota: 1024 cpus: "2-3" }
-  # https://github.com/opencontainers/runtime-spec/blob/master/config-linux.md#network
-  #     network: { classID: 1048577 }
+  #resources:
+  #  cgroup: insonmnia
+  #  resources:
+  #    # https://github.com/opencontainers/runtime-spec/blob/master/config-linux.md#memory
+  #    memory: { limit: 1000 }
+  #    # https://github.com/opencontainers/runtime-spec/blob/master/config-linux.md#cpu
+  #    cpu: {quota: 1024 cpus: "2-3" }
+  #    # https://github.com/opencontainers/runtime-spec/blob/master/config-linux.md#network
+  #    network: { classID: 1048577 }
 
 # Logging settings.
 logging:
@@ -31,6 +32,17 @@ logging:
 # firewall:
 #   server: "stun.ekiga.net:3478"
 
+# A list of IPs that can be used to reach the miner, optional param. If not provided, miner's interfaces will
+# be scanned for such IPs (if there's no firewall settings).
+# Ignored if firewall settings are not null.
+# public_ip_addrs: ["46.148.198.134"]
+
 # GPUConfig:
+  # type: "nvidiadocker"
   # by default nvidia-docker-plugin works on that endpoint
-  # nvidiadockerdriver: "localhost:3476"
+  # args: { nvidiadockerdriver: "localhost:3476" }
+
+ethereum:
+  # Private key for Hub Wallet ethereum account.
+  # (32 bytes in hex format without '0x' prefix.)
+  private_key: "d07fff36ef2c3d15144974c25d3f5c061ae830a81eefd44292588b3cea2c701c"

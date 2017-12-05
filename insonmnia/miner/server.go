@@ -2,35 +2,35 @@ package miner
 
 import (
 	"crypto/ecdsa"
-	"fmt"
+	"encoding/json"
 	"io"
 	"net"
-	"strings"
+	"strconv"
 	"sync"
 	"time"
 
 	"go.uber.org/zap"
+	"google.golang.org/grpc/metadata"
 
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 
 	log "github.com/noxiouz/zapctx/ctxlog"
 
 	pb "github.com/sonm-io/core/proto"
-
-	"encoding/json"
+	"github.com/sonm-io/core/util"
 
 	"github.com/ccding/go-stun/stun"
 	"github.com/docker/docker/api/types"
 
 	"github.com/docker/docker/api/types/container"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/gliderlabs/ssh"
-	frd "github.com/sonm-io/core/fusrodah/miner"
 	"github.com/sonm-io/core/insonmnia/hardware"
 	"github.com/sonm-io/core/insonmnia/resource"
+	"github.com/sonm-io/core/insonmnia/structs"
 )
 
 // Miner holds information about jobs, make orders to Observer and communicates with Hub
@@ -47,9 +47,8 @@ type Miner struct {
 	hubAddress string
 	hubKey     *ecdsa.PublicKey
 
-	// NOTE: do not use static detection
-	pubAddress string
-	natType    stun.NATType
+	publicIPs []string
+	natType   stun.NATType
 
 	rl *reverseListener
 
@@ -71,11 +70,54 @@ type Miner struct {
 
 	statusChannels map[int]chan bool
 	channelCounter int
-	controlGroup   cGroupDeleter
+	controlGroup   cGroup
+	cGroupManager  cGroupManager
 	ssh            SSH
 
 	connectedHubs     map[string]struct{}
 	connectedHubsLock sync.Mutex
+
+	// GRPC TransportCredentials for eth based Auth
+	creds credentials.TransportCredentials
+	// Certificate rotator
+	certRotator util.HitlessCertRotator
+}
+
+type resourceHandle interface {
+	// Commit marks the handle that the resources consumed should not be
+	// released.
+	commit()
+	// Release releases consumed resources.
+	// Useful in conjunction with defer.
+	release()
+}
+
+// NilResourceHandle is a resource handle that does nothing.
+type nilResourceHandle struct{}
+
+func (h *nilResourceHandle) commit() {
+}
+
+func (h *nilResourceHandle) release() {
+}
+
+type ownedResourceHandle struct {
+	miner     *Miner
+	usage     resource.Resources
+	committed bool
+}
+
+func (h *ownedResourceHandle) commit() {
+	h.committed = true
+}
+
+func (h *ownedResourceHandle) release() {
+	if h.committed {
+		return
+	}
+
+	h.miner.resources.Release(&h.usage)
+	h.committed = true
 }
 
 func (m *Miner) saveContainerInfo(id string, info ContainerInfo) {
@@ -224,79 +266,56 @@ func transformRestartPolicy(p *pb.ContainerRestartPolicy) container.RestartPolic
 	return restartPolicy
 }
 
-func transformGPUSupport(p *pb.TaskResourceRequirements) bool {
-	if p == nil {
-		return false
+func (m *Miner) Load(stream pb.Miner_LoadServer) error {
+	result, err := m.ovs.Load(stream.Context(), newChunkReader(stream))
+	if err != nil {
+		return err
 	}
-
-	return p.GetGPUSupport()
-}
-
-func transformResources(p *pb.TaskResourceRequirements) container.Resources {
-	var resources = container.Resources{}
-	if p != nil {
-		resources.NanoCPUs = p.NanoCPUs
-		resources.Memory = p.MaxMemory
-	}
-
-	return resources
-}
-
-func transformEnvVariables(m map[string]string) []string {
-	vars := make([]string, 0, len(m))
-	for k, v := range m {
-		vars = append(vars, fmt.Sprintf("%s=%s", strings.ToUpper(k), v))
-	}
-
-	return vars
+	stream.SetTrailer(metadata.Pairs("status", result.Status))
+	return nil
 }
 
 // Start request from Hub makes Miner start a container
 func (m *Miner) Start(ctx context.Context, request *pb.MinerStartRequest) (*pb.MinerStartReply, error) {
-	log.G(m.ctx).Info("handling Start request", zap.Any("req", request))
+	log.G(m.ctx).Info("handling Start request", zap.Any("request", request))
+
+	resources, err := structs.NewTaskResources(request.GetResources())
+	if err != nil {
+		return nil, err
+	}
+
+	publicKey, err := parsePublicKey(request.PublicKeyData)
+	if err != nil {
+		return nil, status.Errorf(codes.Unauthenticated, "invalid public key provided %v", err)
+	}
+
+	cgroup, resourceHandle, err := m.consume(request.GetOrderId(), resources)
+	if err != nil {
+		return nil, status.Errorf(codes.ResourceExhausted, "failed to start %v", err)
+	}
+	// This can be canceled by using "resourceHandle.commit()".
+	defer resourceHandle.release()
 
 	var d = Description{
 		Image:         request.Image,
 		Registry:      request.Registry,
 		Auth:          request.Auth,
 		RestartPolicy: transformRestartPolicy(request.RestartPolicy),
-		Resources:     transformResources(request.Usage),
+		Resources:     resources.ToContainerResources(cgroup.Suffix()),
 		TaskId:        request.Id,
 		CommitOnStop:  request.CommitOnStop,
-		Env:           transformEnvVariables(request.Env),
-		GPURequired:   transformGPUSupport(request.Usage),
+		Env:           request.Env,
+		GPURequired:   resources.RequiresGPU(),
 	}
 
-	var publicKey ssh.PublicKey
-	if len(request.PublicKeyData) != 0 {
-		var err error
-		k, _, _, _, err := ssh.ParseAuthorizedKey([]byte(request.PublicKeyData))
-		if err != nil {
-			return nil, status.Errorf(codes.Unauthenticated, "invalid public key provided %v", err)
-		}
-		publicKey = k
-	}
-
-	var numCPUs = 1
-	var memory = int64(0)
-	if request.Usage != nil {
-		numCPUs = int(request.Usage.CPUCores)
-		memory = request.Usage.MaxMemory
-	}
-	var usage = resource.NewResources(numCPUs, memory)
-
-	if err := m.resources.Consume(&usage); err != nil {
-		return nil, status.Errorf(codes.ResourceExhausted, "failed to Start %v", err)
-	}
+	// TODO: Detect whether it's the first time allocation. If so - release resources on error.
 
 	m.setStatus(&pb.TaskStatusReply{Status: pb.TaskStatusReply_SPOOLING}, request.Id)
 
 	log.G(m.ctx).Info("spooling an image")
-	err := m.ovs.Spool(ctx, d)
-	if err != nil {
+	if err := m.ovs.Spool(ctx, d); err != nil {
 		log.G(ctx).Error("failed to Spool an image", zap.Error(err))
 		m.setStatus(&pb.TaskStatusReply{Status: pb.TaskStatusReply_BROKEN}, request.Id)
-		m.resources.Release(&usage)
 		return nil, status.Errorf(codes.Internal, "failed to Spool %v", err)
 	}
 
@@ -306,7 +325,6 @@ func (m *Miner) Start(ctx context.Context, request *pb.MinerStartRequest) (*pb.M
 	if err != nil {
 		log.G(ctx).Error("failed to spawn an image", zap.Error(err))
 		m.setStatus(&pb.TaskStatusReply{Status: pb.TaskStatusReply_BROKEN}, request.Id)
-		m.resources.Release(&usage)
 		return nil, status.Errorf(codes.Internal, "failed to Spawn %v", err)
 	}
 	containerInfo.PublicKey = publicKey
@@ -319,19 +337,57 @@ func (m *Miner) Start(ctx context.Context, request *pb.MinerStartRequest) (*pb.M
 
 	var rpl = pb.MinerStartReply{
 		Container: containerInfo.ID,
-		Ports:     make(map[string]*pb.MinerStartReplyPort),
+		Routes:    []*pb.Route{},
 	}
 	for port, v := range containerInfo.Ports {
 		if len(v) > 0 {
-			replyPort := &pb.MinerStartReplyPort{
-				IP:   m.pubAddress,
-				Port: v[0].HostPort,
+			hostPort, err := strconv.ParseUint(v[0].HostPort, 10, 16)
+			if err != nil {
+				log.G(m.ctx).Warn("failed to convert real port to uint16",
+					zap.Error(err),
+					zap.String("port", v[0].HostPort),
+				)
+				continue
 			}
-			rpl.Ports[string(port)] = replyPort
+
+			for _, publicIP := range m.publicIPs {
+				replyRoute := &pb.Route{
+					Port: string(port),
+					Endpoint: &pb.SocketAddr{
+						Addr: publicIP,
+						Port: uint32(hostPort),
+					},
+				}
+				rpl.Routes = append(rpl.Routes, replyRoute)
+			}
 		}
 	}
 
+	resourceHandle.commit()
 	return &rpl, nil
+}
+
+func (m *Miner) consume(orderId string, resources *structs.TaskResources) (cGroup, resourceHandle, error) {
+	cgroup, err := m.cGroupManager.Attach(orderId, resources.ToCgroupResources())
+	if err != nil && err != errCgroupAlreadyExists {
+		return nil, nil, err
+	}
+	if err != errCgroupAlreadyExists {
+		return cgroup, &nilResourceHandle{}, nil
+	}
+
+	usage := resources.ToUsage()
+	if err := m.resources.Consume(&usage); err != nil {
+		return nil, nil, err
+	}
+
+	handle := &ownedResourceHandle{
+		miner:     m,
+		usage:     usage,
+		committed: false,
+	}
+
+	return cgroup, handle, nil
 }
 
 // Stop request forces to kill container
@@ -394,7 +450,7 @@ func (m *Miner) sendUpdatesOnRequest(server pb.Miner_TasksStatusServer) {
 	for {
 		_, err := server.Recv()
 		if err != nil {
-			log.G(m.ctx).Info("tasks status server errored", zap.Error(err))
+			log.G(m.ctx).Info("tasks status server returned an error", zap.Error(err))
 			return
 		}
 		log.G(m.ctx).Debug("handling tasks status request")
@@ -582,29 +638,6 @@ func (m *Miner) Serve() error {
 	go func() {
 		defer wg.Done()
 
-		// if hub addr do not explicitly set via config we'll try to find it via discovery
-		if m.hubAddress == "" {
-			srv, err := frd.NewServer(nil)
-			if err != nil {
-				return
-			}
-			err = srv.Start()
-			if err != nil {
-				return
-			}
-
-			log.G(m.ctx).Info("No hub IP, starting discovery")
-			srv.Serve()
-			hub := srv.GetHub()
-			m.hubAddress = hub.Address
-			m.hubKey = hub.PublicKey
-			log.G(m.ctx).Info("Discovered new hub",
-				zap.String("net_addr", hub.Address),
-				zap.String("eth_addr", crypto.PubkeyToAddress(*hub.PublicKey).String()))
-		} else {
-			log.G(m.ctx).Debug("Using hub IP from config", zap.String("IP", m.hubAddress))
-		}
-
 		t := time.NewTicker(time.Second * 5)
 		defer t.Stop()
 		m.connectToHub(m.hubAddress)
@@ -629,6 +662,9 @@ func (m *Miner) Close() {
 	m.grpcServer.Stop()
 	if m.ssh != nil {
 		m.ssh.Close()
+	}
+	if m.certRotator != nil {
+		m.certRotator.Close()
 	}
 	m.rl.Close()
 	m.controlGroup.Delete()

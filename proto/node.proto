@@ -1,21 +1,14 @@
 syntax = "proto3";
 
-import "bid.proto";
+import "deal.proto";
 import "insonmnia.proto";
-import "miner.proto";
 import "hub.proto";
 
 package sonm;
 
 // The SONM Local node API must also include
 // the Marketplace API, but it already has been described
-// into a "proto / marketplace.proto" file.
-
-enum DealStatus {
-    PENDING = 0;
-    APPROVED = 1;
-    FINISHED = 2;
-}
+// into a "proto/marketplace.proto" file.
 
 // TaskManagement describe a bunch of methods
 // to manage tasks running into the SONM network
@@ -23,11 +16,11 @@ service TaskManagement {
     // List produces a list of all tasks running on different SONM nodes
     rpc List(TaskListRequest) returns (TaskListReply) {}
     // Start starts a task on given resource
-    rpc Start(HubStartTaskRequest) returns (TaskInfo) {}
+    rpc Start(HubStartTaskRequest) returns (HubStartTaskReply) {}
     // Status produces a task status by their ID
-    rpc Status(ID) returns (TaskInfo) {}
+    rpc Status(ID) returns (TaskStatusReply) {}
     // Logs retrieves a task log (stdin/stderr) from given task
-    rpc Logs(ID) returns (stream TaskLogsChunk) {}
+    rpc Logs(TaskLogsRequest) returns (stream TaskLogsChunk) {}
     // Stop stops a task by their IDd
     rpc Stop(ID) returns (Empty) {}
 }
@@ -47,12 +40,6 @@ service DealManagement {
     rpc Status(ID) returns (Deal) {}
     // Finish finishes a deal with given ID
     rpc Finish(ID) returns (Empty) {}
-}
-
-message Deal {
-    string BidID = 1;
-    string AskID = 2;
-    DealStatus status = 3;
 }
 
 message DealListRequest {
@@ -100,10 +87,10 @@ service HubManagement {
     rpc GetAskPlans(Empty) returns (SlotsReply) {}
     // CreateAskPlan allows to create rules
     // for creating Ask orders on Marketplace
-    rpc CreateAskPlan(Slot) returns (Empty) {}
+    rpc CreateAskPlan(InsertSlotRequest) returns (ID) {}
     // RemoveAskPlan allows to remove rules
     // for creating Ask orders on Marketplace
-    rpc RemoveAskPlan(Slot) returns (Empty) {}
+    rpc RemoveAskPlan(ID) returns (Empty) {}
 
     // List produces a list of all running tasks on the Hub
     rpc TaskList(Empty) returns (TaskListReply) {}

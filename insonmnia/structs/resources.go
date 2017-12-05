@@ -1,9 +1,17 @@
 package structs
 
 import (
+	"errors"
 	"reflect"
 
+	"github.com/docker/docker/api/types/container"
+	"github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/sonm-io/core/insonmnia/resource"
 	pb "github.com/sonm-io/core/proto"
+)
+
+var (
+	errResourcesRequired = errors.New("resources field is required")
 )
 
 // Resources wraps the underlying protobuf object with full validation, such
@@ -37,6 +45,20 @@ func (r *Resources) GetMemoryInBytes() uint64 {
 	return r.inner.GetRamBytes()
 }
 
+// GetGPUCount returns the number of GPU devices required.
+func (r *Resources) GetGPUCount() int {
+	switch r.inner.GetGpuCount() {
+	case pb.GPUCount_NO_GPU:
+		return 0
+	case pb.GPUCount_SINGLE_GPU:
+		return 1
+	case pb.GPUCount_MULTIPLE_GPU:
+		return -1
+	}
+
+	return 0
+}
+
 // ValidateResources validates the specified protobuf object to be wrapped.
 func ValidateResources(resources *pb.Resources) error {
 	if resources == nil {
@@ -68,8 +90,58 @@ func (r *Resources) Eq(o *Resources) bool {
 	if r.inner.GetNetworkType() != o.inner.GetNetworkType() {
 		return false
 	}
-	if !reflect.DeepEqual(r.inner.GetProps(), o.inner.GetProps()) {
+	if !reflect.DeepEqual(r.inner.GetProperties(), o.inner.GetProperties()) {
 		return false
 	}
 	return true
+}
+
+type TaskResources struct {
+	inner *pb.TaskResourceRequirements
+}
+
+func NewTaskResources(r *pb.TaskResourceRequirements) (*TaskResources, error) {
+	if r == nil {
+		return nil, errResourcesRequired
+	}
+
+	return &TaskResources{inner: r}, nil
+}
+
+func (r *TaskResources) RequiresGPU() bool {
+	return r.inner.GetGPUSupport() != pb.GPUCount_NO_GPU
+}
+
+func (r *TaskResources) ToUsage() resource.Resources {
+	numGPUs := -1
+	switch r.inner.GetGPUSupport() {
+	case pb.GPUCount_NO_GPU:
+		numGPUs = 0
+	case pb.GPUCount_SINGLE_GPU:
+		numGPUs = 1
+	default:
+	}
+
+	return resource.Resources{
+		NumCPUs: int(r.inner.GetCPUCores()),
+		Memory:  r.inner.GetMaxMemory(),
+		NumGPUs: numGPUs,
+	}
+}
+
+func (r *TaskResources) ToContainerResources(cgroupParent string) container.Resources {
+	return container.Resources{
+		CgroupParent: cgroupParent,
+		Memory:       r.inner.GetMaxMemory(),
+	}
+}
+
+func (r *TaskResources) ToCgroupResources() *specs.LinuxResources {
+	maxMemory := r.inner.GetMaxMemory()
+
+	return &specs.LinuxResources{
+		Memory: &specs.LinuxMemory{
+			Limit: &maxMemory,
+		},
+	}
 }

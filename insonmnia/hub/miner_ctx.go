@@ -2,6 +2,7 @@ package hub
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -16,12 +17,14 @@ import (
 	"github.com/sonm-io/core/insonmnia/hardware"
 	"github.com/sonm-io/core/insonmnia/resource"
 	pb "github.com/sonm-io/core/proto"
+	"github.com/sonm-io/core/util"
 )
 
 var (
+	errSlotNotExists     = errors.New("specified slot is not exists")
 	errSlotAlreadyExists = errors.New("specified slot already exists")
-	errCPUNotEnough      = errors.New("number of CPU cores requested is unable to fit system's capabilities")
-	errMemoryNotEnough   = errors.New("number of memory requested is unable to fit system's capabilities")
+	errOrderNotExists    = errors.New("specified order not exists")
+	errForbiddenMiner    = errors.New("miner is forbidden")
 )
 
 type OrderId string
@@ -34,9 +37,9 @@ type MinerCtx struct {
 	// gRPC connection
 	grpcConn *grpc.ClientConn
 	// gRPC Client
-	Client     pb.MinerClient
-	status_map map[string]*pb.TaskStatusReply
-	status_mu  sync.Mutex
+	Client    pb.MinerClient
+	statusMap map[string]*pb.TaskStatusReply
+	statusMu  sync.Mutex
 	// Incoming TCP-connection
 	conn net.Conn
 
@@ -56,25 +59,26 @@ type MinerCtx struct {
 }
 
 func (h *Hub) createMinerCtx(ctx context.Context, conn net.Conn) (*MinerCtx, error) {
+	var err error
+
+	if h.creds != nil {
+		conn, err = h.tlsHandshake(ctx, conn)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	var (
 		m = MinerCtx{
 			conn:         conn,
-			status_map:   make(map[string]*pb.TaskStatusReply),
+			statusMap:    make(map[string]*pb.TaskStatusReply),
 			usageMapping: make(map[OrderId]*resource.Resources),
 		}
-		err error
 	)
 	m.ctx, m.cancel = context.WithCancel(ctx)
-	// TODO: secure connection
-	// TODO: identify miner via Authorization mechanism
-	// TODO: rediscover jobs assigned to that Miner
-	dctx, cancel := context.WithTimeout(ctx, time.Second*5)
-	defer cancel()
-	m.grpcConn, err = grpc.DialContext(dctx, "miner", grpc.WithInsecure(),
-		grpc.WithDecompressor(grpc.NewGZIPDecompressor()), grpc.WithCompressor(grpc.NewGZIPCompressor()),
-		grpc.WithDialer(func(_ string, _ time.Duration) (net.Conn, error) {
-			return conn, nil
-		}))
+	m.grpcConn, err = util.MakeGrpcClient(ctx, "miner", nil, grpc.WithDialer(func(_ string, _ time.Duration) (net.Conn, error) {
+		return conn, nil
+	}))
 	if err != nil {
 		log.G(ctx).Error("failed to connect to Miner's grpc server", zap.Error(err))
 		m.Close()
@@ -90,6 +94,24 @@ func (h *Hub) createMinerCtx(ctx context.Context, conn net.Conn) (*MinerCtx, err
 	}
 
 	return &m, nil
+}
+
+func (h *Hub) tlsHandshake(ctx context.Context, conn net.Conn) (net.Conn, error) {
+	conn, authInfo, err := h.creds.ClientHandshake(ctx, "", conn)
+	if err != nil {
+		return nil, err
+	}
+
+	switch authInfo := authInfo.(type) {
+	case util.EthAuthInfo:
+		if !h.acl.Has(authInfo.Wallet) {
+			return nil, errForbiddenMiner
+		}
+	default:
+		return nil, fmt.Errorf("unsupported AuthInfo %s %T", authInfo.AuthType(), authInfo)
+	}
+
+	return conn, nil
 }
 
 // ID returns the miner id.
@@ -182,9 +204,9 @@ func (m *MinerCtx) pollStatuses() error {
 			return err
 		}
 
-		m.status_mu.Lock()
-		m.status_map = statusReply.Statuses
-		m.status_mu.Unlock()
+		m.statusMu.Lock()
+		m.statusMap = statusReply.Statuses
+		m.statusMu.Unlock()
 	}
 }
 
@@ -269,6 +291,21 @@ func (m *MinerCtx) releaseDeal(id OrderId) {
 	m.usage.Release(usage)
 }
 
+func (m *MinerCtx) OrderUsage(id OrderId) (*resource.Resources, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.orderUsage(id)
+}
+
+func (m *MinerCtx) orderUsage(id OrderId) (*resource.Resources, error) {
+	usage, exists := m.usageMapping[id]
+	if !exists {
+		return nil, errOrderNotExists
+	}
+
+	return usage, nil
+}
+
 // Orders returns a list of allocated orders.
 // Useful for looking for a proper miner for starting tasks.
 func (m *MinerCtx) Orders() []OrderId {
@@ -279,6 +316,36 @@ func (m *MinerCtx) Orders() []OrderId {
 		orders = append(orders, id)
 	}
 	return orders
+}
+
+func (m *MinerCtx) registerRoutes(ID string, routes []*pb.Route) []routeMapping {
+	var outRoutes []routeMapping
+	for _, route := range routes {
+		binding, err := util.ParsePortBinding(route.Port)
+		if err != nil {
+			log.G(m.ctx).Warn("failed to decode miner's port mapping",
+				zap.String("mapping", route.Port),
+				zap.Error(err),
+			)
+			continue
+		}
+
+		outRoute, err := m.router.RegisterRoute(ID,
+			binding.Network(),
+			route.Endpoint.GetAddr(),
+			uint16(route.GetEndpoint().GetPort()))
+		if err != nil {
+			log.G(m.ctx).Warn("failed to register route", zap.Error(err))
+			continue
+		}
+
+		outRoutes = append(outRoutes, routeMapping{
+			containerPort: route.Port,
+			route:         outRoute,
+		})
+	}
+
+	return outRoutes
 }
 
 // Close frees all connections related to a Miner

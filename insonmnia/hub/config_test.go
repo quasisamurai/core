@@ -26,10 +26,13 @@ func TestLoadConfig(t *testing.T) {
 ethereum:
   private_key: "1000000000000000000000000000000000000000000000000000000000000000"
 endpoint: ":10002"
-monitoring:
+cluster:
   endpoint: ":10001"
 locator:
-  address: "127.0.0.1:9090"`
+  address: "127.0.0.1:9090"
+market:
+  address: "127.0.0.1:9095"`
+
 	err := createTestConfigFile(raw)
 	assert.Nil(t, err)
 
@@ -37,30 +40,7 @@ locator:
 	assert.Nil(t, err)
 
 	assert.Equal(t, ":10002", conf.Endpoint)
-	assert.Equal(t, ":10001", conf.Monitoring.Endpoint)
-}
-
-func TestLoadConfigWithBootnodes(t *testing.T) {
-	defer deleteTestConfigFile()
-	raw := `
-ethereum:
-  private_key: "1000000000000000000000000000000000000000000000000000000000000000"
-endpoint: ":10002"
-bootnodes:
-  - "enode://node1"
-  - "enode://node2"
-monitoring:
-  endpoint: ":10001"
-locator:
-  address: "127.0.0.1:9090"`
-
-	err := createTestConfigFile(raw)
-	assert.Nil(t, err)
-
-	conf, err := NewConfig(testHubConfigPath)
-	assert.Nil(t, err)
-
-	assert.Len(t, conf.Bootnodes, 2)
+	assert.Equal(t, ":10001", conf.Cluster.Endpoint)
 }
 
 func TestLoadInvalidConfig(t *testing.T) {
@@ -91,7 +71,9 @@ monitoring:
 logging:
   level: -1
 locator:
-  address: "127.0.0.1:9090"`
+  address: "127.0.0.1:9090"
+market:
+  address: "127.0.0.1:9095"`
 
 	err := createTestConfigFile(raw)
 	assert.Nil(t, err)
@@ -111,7 +93,9 @@ endpoint: ":10002"
 monitoring:
   endpoint: ":10001"
 locator:
-  address: "127.0.0.1:9090"`
+  address: "127.0.0.1:9090"
+market:
+  address: "127.0.0.1:9095"`
 
 	err := createTestConfigFile(raw)
 	assert.Nil(t, err)
@@ -153,6 +137,8 @@ bootnodes:
   - "enode://node2"
 monitoring:
   endpoint: ":10001"
+market:
+  address: "127.0.0.1:9095"
 locator:
   address: "127.0.0.1:9090"
   period: 500

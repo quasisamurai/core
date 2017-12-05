@@ -2,9 +2,11 @@ package marketplace
 
 import (
 	"fmt"
+	"math/big"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"golang.org/x/net/context"
 
 	"github.com/sonm-io/core/insonmnia/structs"
 	pb "github.com/sonm-io/core/proto"
@@ -12,7 +14,7 @@ import (
 
 func makeOrder() *pb.Order {
 	return &pb.Order{
-		Price: 1,
+		Price: "1",
 		Slot: &pb.Slot{
 			Resources: &pb.Resources{},
 		},
@@ -38,7 +40,7 @@ func TestNewInMemoryStorage_CreateOrder_Errors(t *testing.T) {
 		{
 			fn: func() *pb.Order {
 				order := makeOrder()
-				order.Price = 0
+				order.Price = "0"
 				return order
 			},
 			err: errPriceIsZero,
@@ -136,20 +138,20 @@ func TestNewOrder(t *testing.T) {
 		},
 		{
 			ord: &pb.Order{
-				Price: 0,
+				Price: "0",
 				Slot:  &pb.Slot{},
 			},
 			err: errPriceIsZero,
 		},
 		{
 			ord: &pb.Order{
-				Price: 1,
+				Price: "1",
 			},
 			err: errSlotIsNil,
 		},
 		{
 			ord: &pb.Order{
-				Price: 1,
+				Price: "1",
 				Slot:  &pb.Slot{},
 			},
 			err: errResourcesIsNil,
@@ -177,7 +179,7 @@ func TestCompareWithType(t *testing.T) {
 
 			order: &pb.Order{
 				OrderType: pb.OrderType_BID,
-				Price:     1,
+				Price:     "1",
 				Slot: &pb.Slot{
 					Resources: &pb.Resources{},
 				},
@@ -192,7 +194,7 @@ func TestCompareWithType(t *testing.T) {
 
 			order: &pb.Order{
 				OrderType: pb.OrderType_ASK,
-				Price:     1,
+				Price:     "1",
 				Slot: &pb.Slot{
 					Resources: &pb.Resources{},
 				},
@@ -208,7 +210,7 @@ func TestCompareWithType(t *testing.T) {
 
 			order: &pb.Order{
 				OrderType: pb.OrderType_ASK,
-				Price:     1,
+				Price:     "1",
 				Slot: &pb.Slot{
 					Resources: &pb.Resources{},
 				},
@@ -223,7 +225,7 @@ func TestCompareWithType(t *testing.T) {
 
 			order: &pb.Order{
 				OrderType: pb.OrderType_BID,
-				Price:     1,
+				Price:     "1",
 				Slot: &pb.Slot{
 					Resources: &pb.Resources{},
 				},
@@ -247,7 +249,7 @@ func TestInMemOrderStorage_GetOrders_Count(t *testing.T) {
 	stor := NewInMemoryStorage()
 	for i := 0; i < 100; i++ {
 		ord, err := structs.NewOrder(&pb.Order{
-			Price:     1,
+			Price:     "1",
 			OrderType: pb.OrderType_BID,
 			Slot: &pb.Slot{
 				Resources: &pb.Resources{},
@@ -281,7 +283,7 @@ func TestInMemOrderStorage_GetOrders_Count2(t *testing.T) {
 	stor := NewInMemoryStorage()
 	for i := 0; i < 100; i++ {
 		bid, err := structs.NewOrder(&pb.Order{
-			Price:     1,
+			Price:     "1",
 			OrderType: pb.OrderType_BID,
 			Slot: &pb.Slot{
 				Resources: &pb.Resources{},
@@ -295,7 +297,7 @@ func TestInMemOrderStorage_GetOrders_Count2(t *testing.T) {
 	}
 
 	ask, err := structs.NewOrder(&pb.Order{
-		Price:     1,
+		Price:     "1",
 		OrderType: pb.OrderType_ASK,
 		Slot: &pb.Slot{
 			Resources: &pb.Resources{},
@@ -334,7 +336,7 @@ func TestInMemOrderStorage_GetOrders_Count3(t *testing.T) {
 		}
 
 		bid, err := structs.NewOrder(&pb.Order{
-			Price:     1,
+			Price:     "1",
 			OrderType: ot,
 			Slot: &pb.Slot{
 				Resources: &pb.Resources{},
@@ -379,7 +381,7 @@ func TestInMemOrderStorage_GetOrders_Count3(t *testing.T) {
 }
 
 func TestMarketplace_GetOrders(t *testing.T) {
-	mp := NewMarketplace("")
+	mp := NewMarketplace(context.Background(), "")
 
 	req := &pb.GetOrdersRequest{
 		Slot:      nil,
@@ -396,7 +398,7 @@ func TestInMemOrderStorage_GetOrders_Ordering(t *testing.T) {
 
 	for i := 100; i > 0; i-- {
 		bid, err := structs.NewOrder(&pb.Order{
-			Price:     int64(i + 1),
+			Price:     big.NewInt(int64(i + 1)).String(),
 			OrderType: pb.OrderType_BID,
 			Slot: &pb.Slot{
 				Resources: &pb.Resources{},
@@ -427,7 +429,7 @@ func TestInMemOrderStorage_GetOrders_Ordering(t *testing.T) {
 	for i := 1; i < len(found); i++ {
 		p1 := found[i-1].GetPrice()
 		p2 := found[i].GetPrice()
-		ok := p1 > p2
+		ok := p1.Cmp(p2) == 1
 
 		assert.True(t, ok, fmt.Sprintf("iter %d :: %d should be gt %d", i, p1, p2))
 	}

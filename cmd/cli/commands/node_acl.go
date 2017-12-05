@@ -18,7 +18,7 @@ func init() {
 
 var nodeACLRootCmd = &cobra.Command{
 	Use:   "acl",
-	Short: "Operations with Access Control Lists",
+	Short: "Worker ACL management",
 }
 
 func printWorkerAclList(cmd *cobra.Command, list *pb.GetRegisteredWorkersReply) {
@@ -34,10 +34,11 @@ func printWorkerAclList(cmd *cobra.Command, list *pb.GetRegisteredWorkersReply) 
 }
 
 var nodeACLListCmd = &cobra.Command{
-	Use:   "list",
-	Short: "Show current ACLs",
+	Use:    "list",
+	Short:  "Show current ACLs",
+	PreRun: loadKeyStoreWrapper,
 	Run: func(cmd *cobra.Command, args []string) {
-		hub, err := NewHubInteractor(nodeAddress, timeout)
+		hub, err := NewHubInteractor(nodeAddressFlag, timeoutFlag)
 		if err != nil {
 			showError(cmd, "Cannot connect to Node", err)
 			os.Exit(1)
@@ -54,11 +55,12 @@ var nodeACLListCmd = &cobra.Command{
 }
 
 var nodeACLRegisterCmd = &cobra.Command{
-	Use:   "register <worker_id>",
-	Short: "Register new Worker",
-	Args:  cobra.MinimumNArgs(1),
+	Use:    "register <worker_id>",
+	Short:  "Deregisters a worker credentials",
+	Args:   cobra.MinimumNArgs(1),
+	PreRun: loadKeyStoreWrapper,
 	Run: func(cmd *cobra.Command, args []string) {
-		hub, err := NewHubInteractor(nodeAddress, timeout)
+		hub, err := NewHubInteractor(nodeAddressFlag, timeoutFlag)
 		if err != nil {
 			showError(cmd, "Cannot connect to Node", err)
 			os.Exit(1)
@@ -75,11 +77,12 @@ var nodeACLRegisterCmd = &cobra.Command{
 }
 
 var nodeACLDeregisterCmd = &cobra.Command{
-	Use:   "deregister <worker_id>",
-	Short: "Deregister known worker",
-	Args:  cobra.MinimumNArgs(1),
+	Use:    "deregister <worker_id>",
+	Short:  "Deregisters a worker credentials",
+	Args:   cobra.MinimumNArgs(1),
+	PreRun: loadKeyStoreWrapper,
 	Run: func(cmd *cobra.Command, args []string) {
-		hub, err := NewHubInteractor(nodeAddress, timeout)
+		hub, err := NewHubInteractor(nodeAddressFlag, timeoutFlag)
 		if err != nil {
 			showError(cmd, "Cannot connect to Node", err)
 			os.Exit(1)

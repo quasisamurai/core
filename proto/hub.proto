@@ -2,6 +2,7 @@ syntax = "proto3";
 
 import "bid.proto";
 import "capabilities.proto";
+import "deal.proto";
 import "insonmnia.proto";
 
 package sonm;
@@ -18,6 +19,8 @@ service Hub {
     // TaskList returns info about all Tasks on all Workers on the Hub
     rpc TaskList(Empty) returns (TaskListReply) {}
 
+    rpc PushTask(stream Chunk) returns (stream Progress) {}
+    // StartTask schedules the task associcated with a deal on some miner.
     rpc StartTask(HubStartTaskRequest) returns (HubStartTaskReply) {}
     rpc StopTask(ID) returns (Empty) {}
 
@@ -33,9 +36,10 @@ service Hub {
     // Devices returns list of all available devices that this Hub awares of
     // with tieir full description.
     rpc Devices(Empty) returns (DevicesReply) {}
+    // MinerDevices returns a list of all available devices for given miner ID.
+    rpc MinerDevices(ID) returns (DevicesReply) {}
     // GetDeviceProperties allows to obtain previously assigned resource
     // properties for a given device.
-    // TODO: Just string?
     rpc GetDeviceProperties(ID) returns (GetDevicePropertiesReply) {}
     // SetDeviceProperties method allows to specify additional resource
     // properties for a device specified by its ID.
@@ -60,10 +64,10 @@ service Hub {
     rpc Slots(Empty) returns (SlotsReply) {}
     // AddSlot allows to assign a new slot.
     // This method can fail if either there are no such resources found or it
-    // has been previourly assigned.
-    rpc InsertSlot(Slot) returns (Empty) {}
+    // has been previourly assigned. 
+    rpc InsertSlot(InsertSlotRequest) returns (ID) {}
     // RemoveSlot removes the speified slot if fully matches.
-    rpc RemoveSlot(Slot) returns (Empty) {}
+    rpc RemoveSlot(ID) returns (Empty) {}
 }
 
 message ListReply {
@@ -73,22 +77,20 @@ message ListReply {
     map<string, ListValue> info = 1;
 }
 
-message TaskRequirements {
-    // How much resources consumes a task. This is used both for scheduling and for cgroups configuration.
-    TaskResourceRequirements resources = 1;
-
-    // Optional miner ID restrictions (currently IP:port), that are allowed to start a task.
-    repeated string miners = 2;
-}
-
 message HubStartTaskRequest {
-    TaskRequirements requirements = 1;
+    // Deal points to the deal associated with workers where the task should be
+    // started.
+    Deal deal = 1;
     string registry = 2;
+    // Image specifies a Docker image name.
     string image = 3;
     string auth = 4;
     string PublicKeyData = 5;
     bool commitOnStop = 6;
     map<string, string> env = 7;
+
+    // TODO: Currently we allocate only a single task per slot, so resource limitation is meaningless.
+    // TaskResourceRequirements requirements = ?;
 }
 
 message HubStartTaskReply {
@@ -108,6 +110,7 @@ message DealRequest {
     string bidId = 1;
     string askId = 2;
     Order order = 3;
+    string specHash = 4;
 }
 
 message GetDevicePropertiesReply {
@@ -122,7 +125,7 @@ message SetDevicePropertiesRequest {
 }
 
 message SlotsReply {
-    repeated Slot slot = 1;
+    map <string, Slot> slots = 1;
 }
 
 message GetAllSlotsReply {
@@ -174,4 +177,9 @@ message DevicesReply {
     map<string, CPUDeviceInfo> CPUs = 1;
     // GPU unique ID -> Info.
     map<string, GPUDeviceInfo> GPUs = 2;
+}
+
+message InsertSlotRequest {
+    Slot slot = 1;
+    string price = 2;
 }

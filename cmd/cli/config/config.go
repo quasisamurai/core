@@ -6,6 +6,7 @@ import (
 	"path"
 
 	"github.com/jinzhu/configor"
+	"github.com/sonm-io/core/accounts"
 )
 
 const (
@@ -17,12 +18,17 @@ const (
 type Config interface {
 	OutputFormat() string
 	HubAddress() string
+	// KeyStorager included into config because of
+	// cli instance must know how to open the keystore
+	accounts.KeyStorager
 }
 
 // cliConfig implements Config interface
 type cliConfig struct {
-	HubAddr   string `required:"false" default:"" yaml:"hub_address"`
-	OutFormat string `required:"false" default:"" yaml:"output_format"`
+	HubAddr    string `required:"false" default:"" yaml:"hub_address"`
+	OutFormat  string `required:"false" default:"" yaml:"output_format"`
+	Passphrase string `required:"false" default:"" yaml:"pass_phrase"`
+	Keystore   string `required:"false" default:"" yaml:"key_store"`
 }
 
 func (cc *cliConfig) OutputFormat() string {
@@ -31,6 +37,14 @@ func (cc *cliConfig) OutputFormat() string {
 
 func (cc *cliConfig) HubAddress() string {
 	return cc.HubAddr
+}
+
+func (cc *cliConfig) PassPhrase() string {
+	return cc.Passphrase
+}
+
+func (cc *cliConfig) KeyStore() string {
+	return cc.Keystore
 }
 
 func (cc *cliConfig) getConfigPath() (string, error) {

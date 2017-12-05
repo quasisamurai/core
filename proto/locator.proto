@@ -10,7 +10,7 @@ service Locator {
 }
 
 message AnnounceRequest {
-    string ethAddr = 1;
+    // todo: remove repeated
     repeated string ipAddr = 2;
 }
 

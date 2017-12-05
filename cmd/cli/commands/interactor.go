@@ -13,13 +13,14 @@ type CliInteractor interface {
 	HubPing(context.Context) (*pb.PingReply, error)
 	HubStatus(context.Context) (*pb.HubStatusReply, error)
 	HubShowSlots(ctx context.Context) (*pb.SlotsReply, error)
-	HubInsertSlot(ctx context.Context, slot *structs.Slot) (*pb.Empty, error)
+	HubInsertSlot(ctx context.Context, slot *structs.Slot, price string) (*pb.ID, error)
 
 	MinerList(context.Context) (*pb.ListReply, error)
 	MinerStatus(minerID string, appCtx context.Context) (*pb.InfoReply, error)
 
 	TaskList(appCtx context.Context, minerID string) (*pb.StatusMapReply, error)
 	TaskLogs(appCtx context.Context, req *pb.TaskLogsRequest) (pb.Hub_TaskLogsClient, error)
+	TaskPush(ctx context.Context) (pb.Hub_PushTaskClient, error)
 	TaskStart(appCtx context.Context, req *pb.HubStartTaskRequest) (*pb.HubStartTaskReply, error)
 	TaskStatus(appCtx context.Context, taskID string) (*pb.TaskStatusReply, error)
 	TaskStop(appCtx context.Context, taskID string) (*pb.Empty, error)
@@ -83,10 +84,15 @@ func (it *grpcInteractor) HubShowSlots(ctx context.Context) (*pb.SlotsReply, err
 	return it.hub.Slots(c, &pb.Empty{})
 }
 
-func (it *grpcInteractor) HubInsertSlot(ctx context.Context, slot *structs.Slot) (*pb.Empty, error) {
+func (it *grpcInteractor) HubInsertSlot(ctx context.Context, slot *structs.Slot, price string) (*pb.ID, error) {
 	c, cancel := it.ctx(ctx)
 	defer cancel()
-	return it.hub.InsertSlot(c, slot.Unwrap())
+
+	req := &pb.InsertSlotRequest{
+		Price: price,
+		Slot:  slot.Unwrap(),
+	}
+	return it.hub.InsertSlot(c, req)
 }
 
 func (it *grpcInteractor) MinerList(appCtx context.Context) (*pb.ListReply, error) {
@@ -114,6 +120,10 @@ func (it *grpcInteractor) TaskLogs(appCtx context.Context, req *pb.TaskLogsReque
 	return it.hub.TaskLogs(appCtx, req)
 }
 
+func (it *grpcInteractor) TaskPush(ctx context.Context) (pb.Hub_PushTaskClient, error) {
+	return it.hub.PushTask(ctx)
+}
+
 func (it *grpcInteractor) TaskStart(appCtx context.Context, req *pb.HubStartTaskRequest) (*pb.HubStartTaskReply, error) {
 	ctx, cancel := it.ctx(appCtx)
 	defer cancel()
@@ -137,7 +147,7 @@ func (it *grpcInteractor) TaskStop(appCtx context.Context, taskID string) (*pb.E
 }
 
 func NewGrpcInteractor(addr string, to time.Duration) (CliInteractor, error) {
-	cc, err := util.MakeGrpcClient(addr, nil)
+	cc, err := util.MakeGrpcClient(context.Background(), addr, creds)
 	if err != nil {
 		return nil, err
 	}
@@ -163,8 +173,8 @@ type NodeHubInteractor interface {
 	SetDeviceProperties(ID string, properties map[string]float64) (*pb.Empty, error)
 
 	GetAskPlans() (*pb.SlotsReply, error)
-	CreateAskPlan(slot *structs.Slot) (*pb.Empty, error)
-	RemoveAskPlan(slot *structs.Slot) (*pb.Empty, error)
+	CreateAskPlan(slot *structs.Slot, price string) (*pb.ID, error)
+	RemoveAskPlan(id string) (*pb.Empty, error)
 
 	TaskList() (*pb.TaskListReply, error)
 	TaskStatus(id string) (*pb.TaskStatusReply, error)
@@ -254,18 +264,22 @@ func (it *hubInteractor) GetAskPlans() (*pb.SlotsReply, error) {
 	return it.hub.GetAskPlans(ctx, &pb.Empty{})
 }
 
-func (it *hubInteractor) CreateAskPlan(slot *structs.Slot) (*pb.Empty, error) {
+func (it *hubInteractor) CreateAskPlan(slot *structs.Slot, price string) (*pb.ID, error) {
 	ctx, cancel := ctx(it.timeout)
 	defer cancel()
 
-	return it.hub.CreateAskPlan(ctx, slot.Unwrap())
+	req := &pb.InsertSlotRequest{
+		Price: price,
+		Slot:  slot.Unwrap(),
+	}
+	return it.hub.CreateAskPlan(ctx, req)
 }
 
-func (it *hubInteractor) RemoveAskPlan(slot *structs.Slot) (*pb.Empty, error) {
+func (it *hubInteractor) RemoveAskPlan(id string) (*pb.Empty, error) {
 	ctx, cancel := ctx(it.timeout)
 	defer cancel()
 
-	return it.hub.RemoveAskPlan(ctx, slot.Unwrap())
+	return it.hub.RemoveAskPlan(ctx, &pb.ID{Id: id})
 }
 
 func (it *hubInteractor) TaskList() (*pb.TaskListReply, error) {
@@ -284,7 +298,7 @@ func (it *hubInteractor) TaskStatus(id string) (*pb.TaskStatusReply, error) {
 }
 
 func NewHubInteractor(addr string, timeout time.Duration) (NodeHubInteractor, error) {
-	cc, err := util.MakeGrpcClient(addr, nil)
+	cc, err := util.MakeGrpcClient(context.Background(), addr, creds)
 	if err != nil {
 		return nil, err
 	}
@@ -297,6 +311,7 @@ func NewHubInteractor(addr string, timeout time.Duration) (NodeHubInteractor, er
 
 type NodeMarketInteractor interface {
 	GetOrders(slot *structs.Slot, orderType pb.OrderType, count uint64) ([]*pb.Order, error)
+	GetProcessing() (*pb.GetProcessingReply, error)
 	GetOrderByID(id string) (*pb.Order, error)
 	CreateOrder(order *pb.Order) (*pb.Order, error)
 	CancelOrder(id string) error
@@ -323,6 +338,13 @@ func (it *marketInteractor) GetOrders(slot *structs.Slot, orderType pb.OrderType
 	}
 
 	return reply.GetOrders(), nil
+}
+
+func (it *marketInteractor) GetProcessing() (*pb.GetProcessingReply, error) {
+	ctx, cancel := ctx(it.timeout)
+	defer cancel()
+
+	return it.market.GetProcessing(ctx, &pb.Empty{})
 }
 
 func (it *marketInteractor) GetOrderByID(id string) (*pb.Order, error) {
@@ -352,7 +374,7 @@ func ctx(timeout time.Duration) (context.Context, context.CancelFunc) {
 }
 
 func NewMarketInteractor(addr string, timeout time.Duration) (NodeMarketInteractor, error) {
-	cc, err := util.MakeGrpcClient(addr, nil)
+	cc, err := util.MakeGrpcClient(context.Background(), addr, creds)
 	if err != nil {
 		return nil, err
 	}
@@ -364,4 +386,116 @@ func NewMarketInteractor(addr string, timeout time.Duration) (NodeMarketInteract
 		market:  market,
 	}, nil
 
+}
+
+type DealsInteractor interface {
+	List(from string, status pb.DealStatus) ([]*pb.Deal, error)
+	Status(id string) (*pb.Deal, error)
+	FinishDeal(id string) error
+}
+
+type dealsInteractor struct {
+	timeout time.Duration
+	deals   pb.DealManagementClient
+}
+
+func (it *dealsInteractor) List(from string, status pb.DealStatus) ([]*pb.Deal, error) {
+	ctx, cancel := ctx(it.timeout)
+	defer cancel()
+
+	req := &pb.DealListRequest{Owner: from, Status: status}
+	reply, err := it.deals.List(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	return reply.GetDeal(), nil
+}
+
+func (it *dealsInteractor) Status(id string) (*pb.Deal, error) {
+	ctx, cancel := ctx(it.timeout)
+	defer cancel()
+
+	return it.deals.Status(ctx, &pb.ID{Id: id})
+}
+
+func (it *dealsInteractor) FinishDeal(id string) error {
+	ctx, cancel := ctx(it.timeout)
+	defer cancel()
+
+	_, err := it.deals.Finish(ctx, &pb.ID{Id: id})
+	return err
+}
+
+func NewDealsInteractor(addr string, timeout time.Duration) (DealsInteractor, error) {
+	cc, err := util.MakeGrpcClient(context.Background(), addr, creds)
+	if err != nil {
+		return nil, err
+	}
+
+	return &dealsInteractor{
+		timeout: timeout,
+		deals:   pb.NewDealManagementClient(cc),
+	}, nil
+}
+
+type TasksInteractor interface {
+	List(hubAddr string) (*pb.TaskListReply, error)
+	Start(req *pb.HubStartTaskRequest) (*pb.HubStartTaskReply, error)
+	Status(id string) (*pb.TaskStatusReply, error)
+	Logs(req *pb.TaskLogsRequest) (pb.TaskManagement_LogsClient, error)
+	Stop(id string) (*pb.Empty, error)
+}
+
+type tasksInteractor struct {
+	timeout time.Duration
+	tasks   pb.TaskManagementClient
+}
+
+func (it *tasksInteractor) List(hubAddr string) (*pb.TaskListReply, error) {
+	ctx, cancel := ctx(it.timeout)
+	defer cancel()
+
+	req := &pb.TaskListRequest{HubID: hubAddr}
+	return it.tasks.List(ctx, req)
+}
+
+func (it *tasksInteractor) Start(req *pb.HubStartTaskRequest) (*pb.HubStartTaskReply, error) {
+	ctx, cancel := ctx(it.timeout)
+	defer cancel()
+
+	return it.tasks.Start(ctx, req)
+}
+
+func (it *tasksInteractor) Status(id string) (*pb.TaskStatusReply, error) {
+	ctx, cancel := ctx(it.timeout)
+	defer cancel()
+
+	return it.tasks.Status(ctx, &pb.ID{Id: id})
+}
+
+func (it *tasksInteractor) Logs(req *pb.TaskLogsRequest) (pb.TaskManagement_LogsClient, error) {
+	ctx, cancel := ctx(it.timeout)
+	defer cancel()
+
+	return it.tasks.Logs(ctx, req)
+}
+
+func (it *tasksInteractor) Stop(id string) (*pb.Empty, error) {
+	ctx, cancel := ctx(it.timeout)
+	defer cancel()
+
+	return it.tasks.Stop(ctx, &pb.ID{Id: id})
+}
+
+func NewTasksInteractor(addr string, timeout time.Duration) (TasksInteractor, error) {
+	cc, err := util.MakeGrpcClient(context.Background(), addr, creds)
+	if err != nil {
+		return nil, err
+	}
+
+	return &tasksInteractor{
+		timeout: timeout,
+		tasks:   pb.NewTaskManagementClient(cc),
+	}, nil
 }

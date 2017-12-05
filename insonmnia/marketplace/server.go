@@ -6,10 +6,12 @@ import (
 	"sort"
 	"sync"
 
+	log "github.com/noxiouz/zapctx/ctxlog"
 	"github.com/pborman/uuid"
 	"github.com/sonm-io/core/insonmnia/structs"
 	pb "github.com/sonm-io/core/proto"
 	"github.com/sonm-io/core/util"
+	"go.uber.org/zap"
 	"golang.org/x/net/context"
 )
 
@@ -18,20 +20,17 @@ const (
 )
 
 var (
-	errOrderNotFound     = errors.New("Order cannot be found")
-	errPriceIsZero       = errors.New("Order price cannot be less or equal than zero")
-	errOrderIsNil        = errors.New("Order cannot be nil")
-	errSlotIsNil         = errors.New("Order slot cannot be nil")
-	errResourcesIsNil    = errors.New("Slot resources cannot be nil")
-	errStartTimeAfterEnd = errors.New("Start time is after end time")
-	errStartTimeRequired = errors.New("Start time is required")
-	errEndTimeRequired   = errors.New("End time is required")
-	errSearchParamsIsNil = errors.New("Search params cannot be nil")
+	errOrderNotFound     = errors.New("order cannot be found")
+	errPriceIsZero       = errors.New("order price cannot be less or equal than zero")
+	errOrderIsNil        = errors.New("order cannot be nil")
+	errSlotIsNil         = errors.New("order slot cannot be nil")
+	errResourcesIsNil    = errors.New("slot resources cannot be nil")
+	errSearchParamsIsNil = errors.New("search params cannot be nil")
 )
 
-// searchParams holds all fields that using to search on the market
-// Preferring to extend this structure instead of increasing amount
-// of params that accepting by OrderStorage.GetOrders() function
+// searchParams holds all fields that are used to search on the market.
+// Extend this structure instead of increasing amount of params accepted
+// by OrderStorage.GetOrders() function.
 type searchParams struct {
 	slot      *structs.Slot
 	orderType pb.OrderType
@@ -47,7 +46,8 @@ type OrderStorage interface {
 
 type inMemOrderStorage struct {
 	sync.RWMutex
-	db map[string]*structs.Order
+	ctx context.Context
+	db  map[string]*structs.Order
 }
 
 func (in *inMemOrderStorage) generateID() string {
@@ -66,7 +66,7 @@ func (in *inMemOrderStorage) GetOrders(c *searchParams) ([]*structs.Order, error
 	in.RLock()
 	defer in.RUnlock()
 
-	orders := []*structs.Order{}
+	var orders []*structs.Order
 	for _, order := range in.db {
 		if uint64(len(orders)) >= c.count {
 			break
@@ -133,11 +133,14 @@ func NewInMemoryStorage() OrderStorage {
 }
 
 type Marketplace struct {
+	ctx  context.Context
 	db   OrderStorage
 	addr string
 }
 
 func (m *Marketplace) GetOrders(_ context.Context, req *pb.GetOrdersRequest) (*pb.GetOrdersReply, error) {
+	log.G(m.ctx).Info("handling GetOrders request", zap.Any("req", req))
+
 	slot, err := structs.NewSlot(req.Slot)
 	if err != nil {
 		return nil, err
@@ -159,7 +162,7 @@ func (m *Marketplace) GetOrders(_ context.Context, req *pb.GetOrdersRequest) (*p
 		return nil, err
 	}
 
-	innerOrders := []*pb.Order{}
+	var innerOrders []*pb.Order
 	for _, o := range orders {
 		innerOrders = append(innerOrders, o.Unwrap())
 	}
@@ -170,6 +173,8 @@ func (m *Marketplace) GetOrders(_ context.Context, req *pb.GetOrdersRequest) (*p
 }
 
 func (m *Marketplace) GetOrderByID(_ context.Context, req *pb.ID) (*pb.Order, error) {
+	log.G(m.ctx).Info("handling GetOrderByID request", zap.Any("req", req))
+
 	order, err := m.db.GetOrderByID(req.Id)
 	if err != nil {
 		return nil, err
@@ -178,6 +183,8 @@ func (m *Marketplace) GetOrderByID(_ context.Context, req *pb.ID) (*pb.Order, er
 }
 
 func (m *Marketplace) CreateOrder(_ context.Context, req *pb.Order) (*pb.Order, error) {
+	log.G(m.ctx).Info("handling CreateOrder request", zap.Any("req", req))
+
 	order, err := structs.NewOrder(req)
 	if err != nil {
 		return nil, err
@@ -192,11 +199,20 @@ func (m *Marketplace) CreateOrder(_ context.Context, req *pb.Order) (*pb.Order, 
 }
 
 func (m *Marketplace) CancelOrder(_ context.Context, req *pb.Order) (*pb.Empty, error) {
+	log.G(m.ctx).Info("handling CancelOrder request", zap.Any("req", req))
+
 	err := m.db.DeleteOrder(req.Id)
 	if err != nil {
 		return nil, err
 	}
 	return &pb.Empty{}, nil
+}
+
+func (m *Marketplace) GetProcessing(ctx context.Context, req *pb.Empty) (*pb.GetProcessingReply, error) {
+	// This method exists just to match the Marketplace interface.
+	// The Market service itself is unable to know anything about processing orders.
+	// This method is implemented for Node in `insonmnia/node/market.go:348`
+	return nil, nil
 }
 
 func (m *Marketplace) Serve() error {
@@ -205,14 +221,15 @@ func (m *Marketplace) Serve() error {
 		return err
 	}
 
-	srv := util.MakeGrpcServer()
+	srv := util.MakeGrpcServer(nil)
 	pb.RegisterMarketServer(srv, m)
 	srv.Serve(lis)
 	return nil
 }
 
-func NewMarketplace(addr string) *Marketplace {
+func NewMarketplace(ctx context.Context, addr string) *Marketplace {
 	return &Marketplace{
+		ctx:  ctx,
 		addr: addr,
 		db:   NewInMemoryStorage(),
 	}

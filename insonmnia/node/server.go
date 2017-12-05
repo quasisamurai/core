@@ -1,113 +1,107 @@
 package node
 
 import (
+	"crypto/ecdsa"
 	"net"
+	"time"
 
-	"github.com/jinzhu/configor"
 	log "github.com/noxiouz/zapctx/ctxlog"
+	"github.com/sonm-io/core/blockchain"
 	pb "github.com/sonm-io/core/proto"
 	"github.com/sonm-io/core/util"
 	"go.uber.org/zap"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
-// Config is LocalNode config
-type Config interface {
-	// ListenAddress is gRPC endpoint that Node binds to
-	ListenAddress() string
-	// MarketEndpoint is Marketplace gRPC endpoint
-	MarketEndpoint() string
-	// HubEndpoint is Hub's gRPC endpoint (not required)
-	HubEndpoint() string
-	// LogLevel return log verbosity
-	LogLevel() int
-	// ClientID returns EtherumID of Node Owner
-	ClientID() string
+type hubClientCreator func(addr string) (pb.HubClient, error)
+
+// remoteOptions describe options related to remove gRPC services
+type remoteOptions struct {
+	ctx            context.Context
+	key            *ecdsa.PrivateKey
+	conf           Config
+	creds          credentials.TransportCredentials
+	approveTimeout time.Duration
+	locator        pb.LocatorClient
+	market         pb.MarketClient
+	eth            blockchain.Blockchainer
+	hubCreator     hubClientCreator
 }
 
-type nodeConfig struct {
-	ListenAddr string `required:"true" yaml:"listen_addr"`
-}
-
-type marketConfig struct {
-	Endpoint string `required:"true" yaml:"endpoint"`
-}
-
-type hubConfig struct {
-	Endpoint string `required:"false" yaml:"endpoint"`
-}
-
-type logConfig struct {
-	Level int `required:"true" default:"-1" yaml:"level"`
-}
-
-type yamlConfig struct {
-	Node   nodeConfig   `required:"true" yaml:"node"`
-	Market marketConfig `required:"true" yaml:"market"`
-	Log    logConfig    `required:"true" yaml:"log"`
-	Hub    *hubConfig   `required:"false" yaml:"hub"`
-}
-
-func (y *yamlConfig) ListenAddress() string {
-	return y.Node.ListenAddr
-}
-
-func (y *yamlConfig) MarketEndpoint() string {
-	return y.Market.Endpoint
-}
-
-func (y *yamlConfig) HubEndpoint() string {
-	if y.Hub != nil {
-		return y.Hub.Endpoint
-	}
-	return ""
-}
-
-func (y *yamlConfig) ClientID() string {
-	// NOTE: just for testing on current iteration
-	// key exchange will be implemented soon
-
-	return "my-uniq-id"
-}
-
-func (y *yamlConfig) LogLevel() int {
-	return y.Log.Level
-}
-
-// NewConfig loads localNode config from given .yaml file
-func NewConfig(path string) (Config, error) {
-	cfg := &yamlConfig{}
-
-	err := configor.Load(cfg, path)
+func newRemoteOptions(ctx context.Context, key *ecdsa.PrivateKey, conf Config, creds credentials.TransportCredentials) (*remoteOptions, error) {
+	locatorCC, err := util.MakeGrpcClient(ctx, conf.LocatorEndpoint(), creds)
 	if err != nil {
 		return nil, err
 	}
 
-	return cfg, nil
+	marketCC, err := util.MakeGrpcClient(ctx, conf.MarketEndpoint(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	bcAPI, err := blockchain.NewAPI(nil, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	hc := func(addr string) (pb.HubClient, error) {
+		cc, err := util.MakeGrpcClient(ctx, addr, creds)
+		if err != nil {
+			return nil, err
+		}
+
+		return pb.NewHubClient(cc), nil
+	}
+
+	return &remoteOptions{
+		key:            key,
+		conf:           conf,
+		ctx:            ctx,
+		creds:          creds,
+		locator:        pb.NewLocatorClient(locatorCC),
+		market:         pb.NewMarketClient(marketCC),
+		eth:            bcAPI,
+		approveTimeout: 900 * time.Second,
+		hubCreator:     hc,
+	}, nil
 }
 
 // Node is LocalNode instance
 type Node struct {
-	ctx  context.Context
-	conf Config
-	lis  net.Listener
-	srv  *grpc.Server
+	ctx     context.Context
+	conf    Config
+	lis     net.Listener
+	srv     *grpc.Server
+	privKey *ecdsa.PrivateKey
 }
 
 // New creates new Local Node instance
 // also method starts internal gRPC client connections
 // to the external services like Market and Hub
-func New(ctx context.Context, c Config) (*Node, error) {
+func New(ctx context.Context, c Config, key *ecdsa.PrivateKey) (*Node, error) {
 	lis, err := net.Listen("tcp", c.ListenAddress())
 	if err != nil {
 		return nil, err
 	}
 
-	srv := util.MakeGrpcServer()
+	_, TLSConfig, err := util.NewHitlessCertRotator(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	creds := util.NewTLS(TLSConfig)
+	srv := util.MakeGrpcServer(creds)
+
+	opts, err := newRemoteOptions(ctx, key, c, creds)
+	if err != nil {
+		return nil, err
+	}
+
 	// register hub connection if hub addr is set
 	if c.HubEndpoint() != "" {
-		hub, err := newHubAPI(ctx, c)
+		hub, err := newHubAPI(opts)
 		if err != nil {
 			return nil, err
 		}
@@ -115,25 +109,33 @@ func New(ctx context.Context, c Config) (*Node, error) {
 		log.G(ctx).Info("hub service registered", zap.String("endpt", c.HubEndpoint()))
 	}
 
-	market, err := newMarketAPI(ctx, c)
+	market, err := newMarketAPI(opts)
 	if err != nil {
 		return nil, err
 	}
-
 	pb.RegisterMarketServer(srv, market)
 	log.G(ctx).Info("market service registered", zap.String("endpt", c.MarketEndpoint()))
 
-	deals := newDealsAPI()
+	deals, err := newDealsAPI(opts)
+	if err != nil {
+		return nil, err
+	}
 	pb.RegisterDealManagementServer(srv, deals)
+	log.G(ctx).Info("deals service registered")
 
-	tasks := newTasksAPI()
+	tasks, err := newTasksAPI(opts)
+	if err != nil {
+		return nil, err
+	}
 	pb.RegisterTaskManagementServer(srv, tasks)
+	log.G(ctx).Info("tasks service registered")
 
 	return &Node{
-		lis:  lis,
-		conf: c,
-		ctx:  ctx,
-		srv:  srv,
+		lis:     lis,
+		conf:    c,
+		ctx:     ctx,
+		srv:     srv,
+		privKey: key,
 	}, nil
 }
 

@@ -1,17 +1,27 @@
 package locator
 
 import (
-	"errors"
+	"crypto/ecdsa"
+	"crypto/tls"
 	"net"
 	"sync"
 	"time"
 
+	"github.com/ethereum/go-ethereum/crypto"
+	log "github.com/noxiouz/zapctx/ctxlog"
+	"github.com/pkg/errors"
 	pb "github.com/sonm-io/core/proto"
+	"github.com/sonm-io/core/util"
+	"go.uber.org/zap"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
 )
 
-var errNodeNotFound = errors.New("Node with given Eth address cannot be found")
+var errNodeNotFound = errors.New("node with given Eth address cannot be found")
 
 type node struct {
 	ethAddr string
@@ -20,11 +30,66 @@ type node struct {
 }
 
 type Locator struct {
-	grpc *grpc.Server
-	conf *LocatorConfig
-
 	mx sync.Mutex
-	db map[string]*node
+
+	grpc        *grpc.Server
+	conf        *LocatorConfig
+	db          map[string]*node
+	ctx         context.Context
+	certRotator util.HitlessCertRotator
+	ethKey      *ecdsa.PrivateKey
+	creds       credentials.TransportCredentials
+}
+
+func (l *Locator) Announce(ctx context.Context, req *pb.AnnounceRequest) (*pb.Empty, error) {
+	ethAddr, err := l.extractEthAddr(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	log.G(l.ctx).Info("handling Announce request",
+		zap.String("eth", ethAddr), zap.Strings("ips", req.IpAddr))
+
+	l.putAnnounce(&node{
+		ethAddr: ethAddr,
+		ipAddr:  req.IpAddr,
+	})
+
+	return &pb.Empty{}, nil
+}
+
+func (l *Locator) Resolve(ctx context.Context, req *pb.ResolveRequest) (*pb.ResolveReply, error) {
+	log.G(l.ctx).Info("handling Resolve request", zap.String("eth", req.EthAddr))
+
+	n, err := l.getResolve(req.EthAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.ResolveReply{IpAddr: n.ipAddr}, nil
+}
+
+func (l *Locator) Serve() error {
+	lis, err := net.Listen("tcp", l.conf.ListenAddr)
+	if err != nil {
+		return err
+	}
+
+	return l.grpc.Serve(lis)
+}
+
+func (l *Locator) extractEthAddr(ctx context.Context) (string, error) {
+	pr, ok := peer.FromContext(ctx)
+	if !ok {
+		return "", status.Error(codes.DataLoss, "failed to get peer from ctx")
+	}
+
+	switch info := pr.AuthInfo.(type) {
+	case util.EthAuthInfo:
+		return info.Wallet, nil
+	default:
+		return "", status.Error(codes.Unauthenticated, "wrong AuthInfo type")
+	}
 }
 
 func (l *Locator) putAnnounce(n *node) {
@@ -65,70 +130,50 @@ func (l *Locator) traverseAndClean() {
 	l.mx.Lock()
 	defer l.mx.Unlock()
 
+	var (
+		total = len(l.db)
+		del   uint64
+		keep  uint64
+	)
 	for addr, node := range l.db {
 		if node.ts.Before(deadline) {
 			delete(l.db, addr)
+			del++
+		} else {
+			keep++
 		}
 	}
+
+	log.G(l.ctx).Debug("expired nodes cleaned",
+		zap.Int("total", total), zap.Uint64("keep", keep), zap.Uint64("del", del))
 }
 
-func (l *Locator) Announce(ctx context.Context, req *pb.AnnounceRequest) (*pb.Empty, error) {
-	n := &node{
-		ethAddr: req.EthAddr,
-		ipAddr:  req.IpAddr,
+func NewLocator(ctx context.Context, conf *LocatorConfig) (l *Locator, err error) {
+	ethKey, err := crypto.HexToECDSA(conf.Eth.PrivateKey)
+	if err != nil {
+		return nil, errors.Wrap(err, "malformed ethereum private key")
 	}
 
-	l.putAnnounce(n)
-	return &pb.Empty{}, nil
-}
+	l = &Locator{
+		db:     make(map[string]*node),
+		conf:   conf,
+		ctx:    ctx,
+		ethKey: ethKey,
+	}
 
-func (l *Locator) Resolve(ctx context.Context, req *pb.ResolveRequest) (*pb.ResolveReply, error) {
-	n, err := l.getResolve(req.EthAddr)
+	var TLSConfig *tls.Config
+	l.certRotator, TLSConfig, err = util.NewHitlessCertRotator(ctx, l.ethKey)
 	if err != nil {
 		return nil, err
 	}
 
-	return &pb.ResolveReply{IpAddr: n.ipAddr}, nil
-}
-
-func (l *Locator) Serve() error {
-	lis, err := net.Listen("tcp", l.conf.ListenAddr)
-	if err != nil {
-		return err
-	}
-
-	return l.grpc.Serve(lis)
-}
-
-type LocatorConfig struct {
-	ListenAddr    string
-	NodeTTL       time.Duration
-	CleanupPeriod time.Duration
-}
-
-func DefaultLocatorConfig() *LocatorConfig {
-	return &LocatorConfig{
-		ListenAddr:    ":9090",
-		NodeTTL:       time.Hour,
-		CleanupPeriod: time.Minute,
-	}
-}
-
-func NewLocator(conf *LocatorConfig) *Locator {
-	srv := grpc.NewServer(
-		grpc.RPCCompressor(grpc.NewGZIPCompressor()),
-		grpc.RPCDecompressor(grpc.NewGZIPDecompressor()),
-	)
-
-	l := &Locator{
-		mx:   sync.Mutex{},
-		db:   make(map[string]*node),
-		grpc: srv,
-		conf: conf,
-	}
+	l.creds = util.NewTLS(TLSConfig)
+	srv := util.MakeGrpcServer(l.creds)
+	l.grpc = srv
 
 	go l.cleanExpiredNodes()
 
 	pb.RegisterLocatorServer(srv, l)
-	return l
+
+	return l, nil
 }

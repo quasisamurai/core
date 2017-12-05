@@ -7,6 +7,7 @@ import (
 	"io"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/docker/go-connections/nat"
 	"github.com/gliderlabs/ssh"
 	log "github.com/noxiouz/zapctx/ctxlog"
+	"github.com/sonm-io/core/insonmnia/miner/gpu"
 	"github.com/sonm-io/core/insonmnia/resource"
 	pb "github.com/sonm-io/core/proto"
 )
@@ -34,11 +36,20 @@ type Description struct {
 	RestartPolicy container.RestartPolicy
 	Resources     container.Resources
 	Cmd           []string
-	Env           []string
+	Env           map[string]string
 	TaskId        string
 	CommitOnStop  bool
 
 	GPURequired bool
+}
+
+func (d *Description) FormatEnv() []string {
+	vars := make([]string, 0, len(d.Env))
+	for k, v := range d.Env {
+		vars = append(vars, fmt.Sprintf("%s=%s", strings.ToUpper(k), v))
+	}
+
+	return vars
 }
 
 // ContainerInfo is a brief information about containers
@@ -87,6 +98,9 @@ type ExecConnection types.HijackedResponse
 
 // Overseer watches all miner's applications.
 type Overseer interface {
+	// Load loads an image from the specified reader to the Docker.
+	Load(ctx context.Context, rd io.Reader) (imageLoadStatus, error)
+
 	// Spool prepares an application for its further start.
 	//
 	// For Docker containers this is an equivalent of pulling from the registry.
@@ -125,8 +139,8 @@ type overseer struct {
 	registryAuth map[string]string
 
 	// GPU tuner
-	gpu      *GPUConfig
-	gpuTuner nvidiaGPUTuner
+	gpuCfg   *gpu.Config
+	gpuTuner gpu.Tuner
 
 	// protects containers map
 	mu         sync.Mutex
@@ -135,19 +149,19 @@ type overseer struct {
 }
 
 func (o *overseer) supportGPU() bool {
-	return o.gpu != nil
+	return o.gpuCfg != nil
 }
 
 // NewOverseer creates new overseer
-func NewOverseer(ctx context.Context, gpu *GPUConfig) (Overseer, error) {
+func NewOverseer(ctx context.Context, gpuCfg *gpu.Config) (Overseer, error) {
 	dockerClient, err := client.NewEnvClient()
 	if err != nil {
 		return nil, err
 	}
 
-	var tuner nvidiaGPUTuner = nilGPUTuner{}
-	if gpu != nil {
-		tuner, err = newGPUTuner(gpu)
+	var tuner gpu.Tuner = gpu.NilTuner{}
+	if gpuCfg != nil {
+		tuner, err = gpu.New(ctx, gpuCfg)
 		if err != nil {
 			return nil, err
 		}
@@ -160,7 +174,7 @@ func NewOverseer(ctx context.Context, gpu *GPUConfig) (Overseer, error) {
 
 		client: dockerClient,
 
-		gpu:      gpu,
+		gpuCfg:   gpuCfg,
 		gpuTuner: tuner,
 
 		containers: make(map[string]*containerDescriptor),
@@ -193,6 +207,7 @@ func (o *overseer) Info(ctx context.Context) (map[string]ContainerMetrics, error
 
 func (o *overseer) Close() error {
 	o.cancel()
+	o.gpuTuner.Close()
 	return nil
 }
 
@@ -223,18 +238,18 @@ func (o *overseer) handleStreamingEvents(ctx context.Context, sinceUnix int64, f
 
 				var c *containerDescriptor
 				o.mu.Lock()
-				c, container_found := o.containers[id]
-				s, status_found := o.statuses[id]
+				c, containerFound := o.containers[id]
+				s, statusFound := o.statuses[id]
 				delete(o.containers, id)
 				delete(o.statuses, id)
 				o.mu.Unlock()
-				if !container_found {
+				if !containerFound {
 					// NOTE: it could be orphaned container from our previous launch
 					log.G(ctx).Warn("unknown container with sonm tag will be removed", zap.String("id", id))
 					containerRemove(o.ctx, o.client, id)
 					continue
 				}
-				if status_found {
+				if statusFound {
 					s <- pb.TaskStatusReply_BROKEN
 					close(s)
 				}
@@ -337,6 +352,28 @@ func (o *overseer) collectStats() {
 	}
 }
 
+func (o *overseer) Load(ctx context.Context, rd io.Reader) (imageLoadStatus, error) {
+	source := types.ImageImportSource{
+		Source:     rd,
+		SourceName: "-",
+	}
+
+	options := types.ImageImportOptions{
+		Tag:     "",
+		Message: "",
+	}
+
+	response, err := o.client.ImageImport(ctx, source, "", options)
+	if err != nil {
+		log.G(o.ctx).Error("failed to load an image", zap.Error(err))
+		return imageLoadStatus{}, err
+	}
+
+	defer response.Close()
+
+	return decodeImageLoad(response)
+}
+
 func (o *overseer) Spool(ctx context.Context, d Description) error {
 	log.G(ctx).Info("pull the application image")
 	options := types.ImagePullOptions{
@@ -361,7 +398,7 @@ func (o *overseer) Spool(ctx context.Context, d Description) error {
 }
 
 func (o *overseer) Start(ctx context.Context, description Description) (status chan pb.TaskStatusReply_Status, cinfo ContainerInfo, err error) {
-	var tuner nvidiaGPUTuner = nilGPUTuner{}
+	var tuner gpu.Tuner = gpu.NilTuner{}
 	if description.GPURequired {
 		if !o.supportGPU() {
 			err = fmt.Errorf("GPU required but not supported or disabled")
@@ -390,11 +427,15 @@ func (o *overseer) Start(ctx context.Context, description Description) (status c
 		// NOTE: I don't think it can fail
 		return
 	}
+	var gpuCount = 0
+	if description.GPURequired {
+		gpuCount = -1
+	}
 	cinfo = ContainerInfo{
 		status:    &pb.TaskStatusReply{Status: pb.TaskStatusReply_RUNNING},
 		ID:        cjson.ID,
 		Ports:     cjson.NetworkSettings.Ports,
-		Resources: resource.NewResources(1, description.Resources.Memory),
+		Resources: resource.NewResources(1, description.Resources.Memory, gpuCount),
 	}
 	return status, cinfo, nil
 }

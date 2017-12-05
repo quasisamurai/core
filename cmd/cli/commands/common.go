@@ -1,21 +1,22 @@
 package commands
 
 import (
+	"context"
+	"crypto/ecdsa"
 	"encoding/json"
 	"errors"
 	"os"
 	"time"
 
+	"github.com/sonm-io/core/accounts"
 	"github.com/sonm-io/core/cmd/cli/config"
+	"github.com/sonm-io/core/util"
 	"github.com/spf13/cobra"
+	"google.golang.org/grpc/credentials"
 )
 
 const (
-	appName         = "sonm"
-	hubAddressFlag  = "addr"
-	nodeAddressFlag = "node"
-	hubTimeoutFlag  = "timeout"
-	outputModeFlag  = "out"
+	hubAddressFlagName = "addr"
 
 	// log flag names
 	logTypeFlag       = "type"
@@ -27,13 +28,15 @@ const (
 )
 
 var (
-	rootCmd     = &cobra.Command{Use: appName}
-	version     string
-	hubAddress  string
-	nodeAddress string
-	outputMode  string
-	timeout     = 60 * time.Second
-	cfg         config.Config
+	rootCmd = &cobra.Command{Use: "sonm"}
+	version string
+
+	// flags var
+	hubAddressFlag  string
+	nodeAddressFlag string
+	outputModeFlag  string
+	insecureFlag    bool
+	timeoutFlag     = 60 * time.Second
 
 	// logging flag vars
 	logType       string
@@ -43,22 +46,31 @@ var (
 	tail          string
 	details       bool
 
+	// session-related vars
+	cfg        config.Config
+	sessionKey *ecdsa.PrivateKey = nil
+	creds      credentials.TransportCredentials
+
 	// errors
 	errHubAddressRequired   = errors.New("--addr flag is required")
 	errWorkerIDRequired     = errors.New("worker ID is required")
 	errTaskIDRequired       = errors.New("task ID is required")
 	errTaskFileRequired     = errors.New("task definition file is required")
+	errNotEnoughArguments   = errors.New("not enough arguments")
 	errCannotParsePropsFile = errors.New("cannot parse props file")
 )
 
 func init() {
-	rootCmd.PersistentFlags().StringVar(&hubAddress, hubAddressFlag, "", "hub addr")
-	rootCmd.PersistentFlags().StringVar(&nodeAddress, nodeAddressFlag, "127.0.0.1:9999", "node addr")
-	rootCmd.PersistentFlags().DurationVar(&timeout, hubTimeoutFlag, 60*time.Second, "Connection timeout")
-	rootCmd.PersistentFlags().StringVar(&outputMode, outputModeFlag, "", "Output mode: simple or json")
+	rootCmd.PersistentFlags().StringVar(&hubAddressFlag, hubAddressFlagName, "", "hub addr")
+	rootCmd.PersistentFlags().StringVar(&nodeAddressFlag, "node", "127.0.0.1:9999", "node addr")
+	rootCmd.PersistentFlags().DurationVar(&timeoutFlag, "timeoutFlag", 60*time.Second, "Connection timeoutFlag")
+	rootCmd.PersistentFlags().StringVar(&outputModeFlag, "out", "", "Output mode: simple or json")
+	rootCmd.PersistentFlags().BoolVar(&insecureFlag, "insecure", false, "disable TLS via components")
 
-	nodeRootCmd.AddCommand(nodeHubRootCmd, nodeMarketRootCmd)
+	nodeRootCmd.AddCommand(nodeHubRootCmd, nodeMarketRootCmd, nodeDealsRootCmd, nodeTaskRootCmd)
 	rootCmd.AddCommand(hubRootCmd, minerRootCmd, tasksRootCmd, versionCmd, nodeRootCmd)
+
+	rootCmd.AddCommand(loginCmd)
 }
 
 var nodeRootCmd = &cobra.Command{
@@ -69,13 +81,13 @@ var nodeRootCmd = &cobra.Command{
 // Root configure and return root command
 func Root(c config.Config) *cobra.Command {
 	cfg = c
-	hubAddress = cfg.HubAddress()
+	hubAddressFlag = cfg.HubAddress()
 	rootCmd.SetOutput(os.Stdout)
 	return rootCmd
 }
 
 func checkHubAddressIsSet(cmd *cobra.Command, _ []string) error {
-	if cmd.Flag(hubAddressFlag).Value.String() == "" {
+	if cmd.Flag(hubAddressFlagName).Value.String() == "" {
 		return errHubAddressRequired
 	}
 	return nil
@@ -141,13 +153,53 @@ func showOkJson(cmd *cobra.Command) {
 }
 
 func isSimpleFormat() bool {
-	if outputMode == "" && cfg.OutputFormat() == "" {
+	if outputModeFlag == "" && cfg.OutputFormat() == "" {
 		return true
 	}
 
-	if outputMode == config.OutputModeJSON || cfg.OutputFormat() == config.OutputModeJSON {
+	if outputModeFlag == config.OutputModeJSON || cfg.OutputFormat() == config.OutputModeJSON {
 		return false
 	}
 
 	return true
+}
+
+// loadKeyStoreWrapper implemented to match cobra.Command.PreRun signature.
+//
+// Function loads and opens keystore. Also, storing opened key in "sessionKey" var
+// to be able to reuse it into cli during one session.
+func loadKeyStoreWrapper(cmd *cobra.Command, _ []string) {
+	ko, err := accounts.DefaultKeyOpener(accounts.NewSilentPrinter(), cfg.KeyStore(), cfg.PassPhrase())
+	if err != nil {
+		showError(cmd, err.Error(), nil)
+		os.Exit(1)
+	}
+
+	_, err = ko.OpenKeystore()
+	if err != nil {
+		showError(cmd, err.Error(), nil)
+		os.Exit(1)
+	}
+
+	key, err := ko.GetKey()
+	if err != nil {
+		showError(cmd, err.Error(), nil)
+		os.Exit(1)
+	}
+
+	sessionKey = key
+
+	if !insecureFlag {
+		_, TLSConfig, err := util.NewHitlessCertRotator(context.Background(), sessionKey)
+		if err != nil {
+			showError(cmd, err.Error(), nil)
+			os.Exit(1)
+		}
+		creds = util.NewTLS(TLSConfig)
+	}
+}
+
+func showJSON(cmd *cobra.Command, s interface{}) {
+	b, _ := json.Marshal(s)
+	cmd.Printf("%s\r\n", b)
 }

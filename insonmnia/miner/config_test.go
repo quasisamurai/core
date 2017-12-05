@@ -34,20 +34,6 @@ hub:
 	assert.Equal(t, "127.0.0.1", conf.HubEndpoint())
 }
 
-func TestLoadEmptyConfig(t *testing.T) {
-	defer deleteTestConfigFile()
-	raw := `
-hub:
-  endpoint: ""`
-
-	err := createTestConfigFile(raw)
-	assert.Nil(t, err)
-
-	conf, err := NewConfig(testMinerConfigPath)
-	assert.Nil(t, err)
-	assert.Equal(t, conf.HubEndpoint(), "")
-}
-
 func TestGPUConfig(t *testing.T) {
 	err := createTestConfigFile(`
 hub:
@@ -55,23 +41,15 @@ hub:
 logging:
   level: -1
 GPUConfig:
-  nvidiadockerdriver: "localhost:3476"
+  type: nvidiadocker
+  args: { nvidiadockerdriver: "localhost:3476" }
 `)
 	assert.NoError(t, err)
 	defer deleteTestConfigFile()
 
 	conf, err := NewConfig(testMinerConfigPath)
 	assert.Nil(t, err)
-	assert.Equal(t, "localhost:3476", conf.GPU().NvidiaDockerDriver)
-}
-
-func TestLoadConfigWithoutEndpoint(t *testing.T) {
-	defer deleteTestConfigFile()
-	err := createTestConfigFile("")
-	assert.Nil(t, err)
-
-	conf, err := NewConfig(testMinerConfigPath)
-	assert.NoError(t, err)
-	assert.Nil(t, conf.HubResources())
-	assert.Empty(t, conf.HubEndpoint())
+	assert.Equal(t, "nvidiadocker", conf.GPU().Type)
+	assert.NotEmpty(t, conf.GPU().Args)
+	assert.Equal(t, "localhost:3476", conf.GPU().Args["nvidiadockerdriver"])
 }

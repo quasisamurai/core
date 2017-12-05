@@ -1,9 +1,12 @@
 package commands
 
 import (
+	"encoding/json"
 	"os"
+	"time"
 
 	ds "github.com/c2h5oh/datasize"
+	"github.com/sonm-io/core/insonmnia/node"
 	"github.com/sonm-io/core/insonmnia/structs"
 	pb "github.com/sonm-io/core/proto"
 	"github.com/spf13/cobra"
@@ -25,6 +28,7 @@ func init() {
 		nodeMarketShowCmd,
 		nodeMarketCreteCmd,
 		nodeMarketCancelCmd,
+		nodeMarketProcessingCmd,
 	)
 }
 
@@ -40,13 +44,13 @@ func printSearchResults(cmd *cobra.Command, orders []*pb.Order) {
 	}
 
 	for i, order := range orders {
-		cmd.Printf("%d) %s %s | price = %d\r\n", i+1, order.OrderType.String(), order.Id, order.Price)
+		cmd.Printf("%d) %s %s | price = %s\r\n", i+1, order.OrderType.String(), order.Id, order.Price)
 	}
 }
 
 func printOrderDetails(cmd *cobra.Command, order *pb.Order) {
 	cmd.Printf("ID:             %s\r\n", order.Id)
-	cmd.Printf("Price:          %d\r\n", order.Price)
+	cmd.Printf("Price:          %s\r\n", order.Price)
 
 	cmd.Printf("SupplierID:     %s\r\n", order.SupplierID)
 	cmd.Printf("SupplierRating: %d\r\n", order.Slot.SupplierRating)
@@ -69,12 +73,32 @@ func printOrderCreated(cmd *cobra.Command, order *pb.Order) {
 	cmd.Printf("ID = %s\r\n", order.Id)
 }
 
+func printProcessingOrders(cmd *cobra.Command, tasks *pb.GetProcessingReply) {
+	if isSimpleFormat() {
+		if len(tasks.GetOrders()) == 0 {
+			cmd.Printf("No processing orders\r\n")
+			return
+		}
+
+		for id, order := range tasks.GetOrders() {
+			t := time.Unix(order.Timestamp.Seconds, 0)
+			s := node.HandlerStatusString(uint8(order.Status))
+			cmd.Printf("%s %s %s %s\r\n", t, id, s, order.Extra)
+		}
+
+	} else {
+		b, _ := json.Marshal(tasks)
+		cmd.Printf("%s\r\n", string(b))
+	}
+}
+
 var nodeMarketSearchCmd = &cobra.Command{
-	Use:   "search <slot.yaml>",
-	Short: "Place new Bid order on Marketplace",
-	Args:  cobra.MinimumNArgs(1),
+	Use:    "search <slot.yaml>",
+	Short:  "Search for orders on Marketplace",
+	PreRun: loadKeyStoreWrapper,
+	Args:   cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		market, err := NewMarketInteractor(nodeAddress, timeout)
+		market, err := NewMarketInteractor(nodeAddressFlag, timeoutFlag)
 		if err != nil {
 			showError(cmd, "Cannot connect to Node", err)
 			os.Exit(1)
@@ -105,11 +129,12 @@ var nodeMarketSearchCmd = &cobra.Command{
 }
 
 var nodeMarketShowCmd = &cobra.Command{
-	Use:   "show <order_id>",
-	Short: "Show order details",
-	Args:  cobra.MinimumNArgs(1),
+	Use:    "show <order_id>",
+	Short:  "Show order details",
+	PreRun: loadKeyStoreWrapper,
+	Args:   cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		market, err := NewMarketInteractor(nodeAddress, timeout)
+		market, err := NewMarketInteractor(nodeAddressFlag, timeoutFlag)
 		if err != nil {
 			showError(cmd, "Cannot connect to Node", err)
 			os.Exit(1)
@@ -126,12 +151,33 @@ var nodeMarketShowCmd = &cobra.Command{
 	},
 }
 
-var nodeMarketCreteCmd = &cobra.Command{
-	Use:   "create <order.yaml>",
-	Short: "Place new Bid order on Marketplace",
-	Args:  cobra.MinimumNArgs(1),
+var nodeMarketProcessingCmd = &cobra.Command{
+	Use:    "processing",
+	Short:  "Show processing orders",
+	PreRun: loadKeyStoreWrapper,
 	Run: func(cmd *cobra.Command, args []string) {
-		market, err := NewMarketInteractor(nodeAddress, timeout)
+		market, err := NewMarketInteractor(nodeAddressFlag, timeoutFlag)
+		if err != nil {
+			showError(cmd, "Cannot connect to Node", err)
+			os.Exit(1)
+		}
+
+		reply, err := market.GetProcessing()
+		if err != nil {
+			showError(cmd, "Cannot get processing orders", err)
+			os.Exit(1)
+		}
+		printProcessingOrders(cmd, reply)
+	},
+}
+
+var nodeMarketCreteCmd = &cobra.Command{
+	Use:    "create <order.yaml>",
+	Short:  "Place new Bid order on Marketplace",
+	PreRun: loadKeyStoreWrapper,
+	Args:   cobra.MinimumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		market, err := NewMarketInteractor(nodeAddressFlag, timeoutFlag)
 		if err != nil {
 			showError(cmd, "Cannot connect to Node", err)
 			os.Exit(1)
@@ -155,11 +201,12 @@ var nodeMarketCreteCmd = &cobra.Command{
 }
 
 var nodeMarketCancelCmd = &cobra.Command{
-	Use:   "cancel <order_id>",
-	Short: "Cancel order on Marketplace",
-	Args:  cobra.MinimumNArgs(1),
+	Use:    "cancel <order_id>",
+	Short:  "Cancel order on Marketplace",
+	PreRun: loadKeyStoreWrapper,
+	Args:   cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		market, err := NewMarketInteractor(nodeAddress, timeout)
+		market, err := NewMarketInteractor(nodeAddressFlag, timeoutFlag)
 		if err != nil {
 			showError(cmd, "Cannot connect to Node", err)
 			os.Exit(1)
