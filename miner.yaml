@@ -2,21 +2,25 @@
 hub:
   # Endpoint for hub communication
   # Format is "ethAddr@ip:port".
-   endpoint: 1c54f43a8ec76C15162CC80f31Cf02aE4cd31727@127.0.0.1:10002
+  endpoint: 8125721C2413d99a33E351e1F6Bb4e56b6b633FD@127.0.0.1:10002
 
-  # Resources section is available only on Linux
-  # If configured, all tasks will share this pool of resources.
-  # This pool is a parent control group.
-  # Format is Open Container Initiative Runtime Specification:
-  #resources:
-  #  cgroup: insonmnia
-  #  resources:
-  #    # https://github.com/opencontainers/runtime-spec/blob/master/config-linux.md#memory
-  #    memory: { limit: 1000 }
-  #    # https://github.com/opencontainers/runtime-spec/blob/master/config-linux.md#cpu
-  #    cpu: {quota: 1024 cpus: "2-3" }
-  #    # https://github.com/opencontainers/runtime-spec/blob/master/config-linux.md#network
-  #    network: { classID: 1048577 }
+#  Resources section is available only on Linux
+#  If configured, all tasks will share this pool of resources.
+#  This pool is a parent control group.
+#  Format is Open Container Initiative Runtime Specification:
+#  resources:
+#    cgroup: insonmnia
+#    resources:
+#      # https://github.com/opencontainers/runtime-spec/blob/master/config-linux.md#memory
+#      memory:
+#        limit: 1000
+#      # https://github.com/opencontainers/runtime-spec/blob/master/config-linux.md#cpu
+#      cpu:
+#        quota: 1024
+#        cpus: "2-3"
+#      # https://github.com/opencontainers/runtime-spec/blob/master/config-linux.md#network
+#      network:
+#        classID: 1048577
 
 # Logging settings.
 logging:
@@ -43,6 +47,7 @@ logging:
   # args: { nvidiadockerdriver: "localhost:3476" }
 
 ethereum:
-  # Private key for Hub Wallet ethereum account.
-  # (32 bytes in hex format without '0x' prefix.)
-  private_key: "d07fff36ef2c3d15144974c25d3f5c061ae830a81eefd44292588b3cea2c701c"
+  # path to keystore
+  key_store: "./keys"
+  # passphrase for keystore
+  pass_phrase: "any"

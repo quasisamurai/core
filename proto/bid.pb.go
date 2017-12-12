@@ -42,8 +42,10 @@ It has these top-level messages:
 	GPUDeviceInfo
 	DevicesReply
 	InsertSlotRequest
+	PullTaskRequest
 	Empty
 	ID
+	TaskID
 	PingReply
 	CPUUsage
 	MemoryUsage
@@ -51,6 +53,7 @@ It has these top-level messages:
 	ResourceUsage
 	InfoReply
 	TaskStatusReply
+	AvailableResources
 	StatusMapReply
 	ContainerRestartPolicy
 	TaskLogsRequest
@@ -74,6 +77,7 @@ It has these top-level messages:
 	TaskInfo
 	Route
 	MinerStatusMapRequest
+	SaveRequest
 	TaskListRequest
 	DealListRequest
 	DealListReply

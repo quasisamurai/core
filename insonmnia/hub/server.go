@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	log "github.com/noxiouz/zapctx/ctxlog"
 	"github.com/pkg/errors"
 	"github.com/sonm-io/core/blockchain"
@@ -23,9 +24,10 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/pborman/uuid"
 	"github.com/sonm-io/core/insonmnia/gateway"
 	"github.com/sonm-io/core/insonmnia/hardware/gpu"
@@ -37,11 +39,12 @@ import (
 )
 
 var (
-	ErrInvalidOrderType  = status.Errorf(codes.InvalidArgument, "invalid order type")
-	ErrAskNotFound       = status.Errorf(codes.NotFound, "ask not found")
-	ErrDeviceNotFound    = status.Errorf(codes.NotFound, "device not found")
-	ErrMinerNotFound     = status.Errorf(codes.NotFound, "miner not found")
-	errContractNotExists = status.Errorf(codes.NotFound, "specified contract not exists in the Ethereum")
+	ErrInvalidOrderType        = status.Errorf(codes.InvalidArgument, "invalid order type")
+	ErrAskNotFound             = status.Errorf(codes.NotFound, "ask not found")
+	ErrDeviceNotFound          = status.Errorf(codes.NotFound, "device not found")
+	ErrMinerNotFound           = status.Errorf(codes.NotFound, "miner not found")
+	errContractNotExists       = status.Errorf(codes.NotFound, "specified contract not exists in the Ethereum")
+	errWorkerProtocolViolation = status.Errorf(codes.Internal, "detected worker protocol violation")
 )
 
 // Hub collects miners, send them orders to spawn containers, etc.
@@ -129,7 +132,7 @@ func (h *Hub) Status(ctx context.Context, _ *pb.Empty) (*pb.HubStatusReply, erro
 		Uptime:     uint64(uptime),
 		Platform:   util.GetPlatformName(),
 		Version:    h.version,
-		EthAddr:    hex.EncodeToString(crypto.FromECDSA(h.ethKey)),
+		EthAddr:    util.PubKeyToAddr(h.ethKey.PublicKey),
 	}
 
 	return reply, nil
@@ -186,7 +189,41 @@ func (h *Hub) onRequest(ctx context.Context, req interface{}, info *grpc.UnarySe
 	if forwarded {
 		return r, err
 	}
-	return handler(ctx, req)
+
+	p, ok := peer.FromContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "no peer info")
+	}
+
+	switch au := p.AuthInfo.(type) {
+	case nil:
+		// GRPC_INSECURE should be set
+		return handler(ctx, req)
+	case util.EthAuthInfo:
+		hexWallet := au.Wallet.Hex()
+		if hexWallet != h.ethAddr {
+			if h.acl.Has(hexWallet) {
+				return handler(ctx, req)
+			}
+			return nil, status.Errorf(codes.Unauthenticated, "the wallet %s has no access", au.Wallet)
+		}
+
+		// either we have a redirected request or a request from someone with our key
+		var wallet string
+		if md, ok := metadata.FromContext(ctx); ok {
+			walletMD := md["Wallet"]
+			if len(walletMD) != 0 {
+				wallet = walletMD[0]
+			}
+		}
+		if len(wallet) == 0 || (common.IsHexAddress(wallet) && h.acl.Has(common.HexToAddress(wallet).Hex())) {
+			return handler(ctx, req)
+		}
+		return nil, status.Errorf(codes.Unauthenticated, "the wallet %s has no access", wallet)
+	default:
+		// we are unlikely to reach the point
+		return nil, status.Error(codes.Unauthenticated, "unknown auth info")
+	}
 }
 
 func (h *Hub) tryForwardToLeader(ctx context.Context, request interface{}, info *grpc.UnaryServerInfo) (bool, interface{}, error) {
@@ -205,8 +242,12 @@ func (h *Hub) tryForwardToLeader(ctx context.Context, request interface{}, info 
 		parts := strings.Split(info.FullMethod, "/")
 		methodName := parts[len(parts)-1]
 		m := t.MethodByName(methodName)
-		inValues := make([]reflect.Value, 0, 2)
-		inValues = append(inValues, reflect.ValueOf(ctx), reflect.ValueOf(request))
+		if prInfo, ok := peer.FromContext(ctx); ok {
+			if au, ok := prInfo.AuthInfo.(util.EthAuthInfo); ok {
+				ctx = metadata.NewContext(ctx, metadata.MD{"Wallet": []string{au.Wallet.Hex()}})
+			}
+		}
+		inValues := []reflect.Value{reflect.ValueOf(ctx), reflect.ValueOf(request)}
 		values := m.Call(inValues)
 		var err error
 		if !values[1].IsNil() {
@@ -305,6 +346,51 @@ func (h *Hub) PushTask(stream pb.Hub_PushTaskServer) error {
 	}
 }
 
+func (h *Hub) PullTask(request *pb.PullTaskRequest, stream pb.Hub_PullTaskServer) error {
+	log.G(h.ctx).Info("handling PullTask request", zap.Any("request", request))
+
+	ctx := log.WithLogger(h.ctx, log.G(h.ctx).With(zap.String("request", "pull task"), zap.String("id", uuid.New())))
+
+	// TODO: Rename OrderId to DealId.
+	miner, _, err := h.findMinerByOrder(OrderId(request.GetDealId()))
+	if err != nil {
+		return err
+	}
+
+	// TODO: I don't like that we need explicit container name. Maybe we can store it here?
+	imageID := fmt.Sprintf("%s:%s_%s", request.GetName(), request.GetDealId(), request.GetTaskId())
+
+	log.G(ctx).Debug("pulling image", zap.String("imageID", imageID))
+
+	client, err := miner.Client.Save(stream.Context(), &pb.SaveRequest{ImageID: imageID})
+	header, err := client.Header()
+	if err != nil {
+		return err
+	}
+	stream.SetHeader(header)
+
+	streaming := true
+	for streaming {
+		chunk, err := client.Recv()
+		if chunk != nil {
+			log.G(ctx).Debug("progress", zap.Int("chunkSize", len(chunk.Chunk)))
+
+			if err := stream.Send(chunk); err != nil {
+				return err
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				streaming = false
+			} else {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
 func (h *Hub) StartTask(ctx context.Context, request *pb.HubStartTaskRequest) (*pb.HubStartTaskReply, error) {
 	log.G(h.ctx).Info("handling StartTask request", zap.Any("request", request))
 
@@ -316,7 +402,7 @@ func (h *Hub) StartTask(ctx context.Context, request *pb.HubStartTaskRequest) (*
 }
 
 func (h *Hub) generateTaskID() string {
-	return fmt.Sprintf("%s@%s", uuid.New(), h.ethAddr)
+	return uuid.New()
 }
 
 func (h *Hub) startTask(ctx context.Context, request *structs.StartTaskRequest) (*pb.HubStartTaskReply, error) {
@@ -329,14 +415,14 @@ func (h *Hub) startTask(ctx context.Context, request *structs.StartTaskRequest) 
 	}
 
 	// Extract proper miner associated with the deal specified.
-	miner, usage, err := h.findMinerByOrder(OrderId(request.GetOrderId()))
+	miner, usage, err := h.findMinerByOrder(OrderId(request.GetDealId()))
 	if err != nil {
 		return nil, err
 	}
 
 	taskID := h.generateTaskID()
 	startRequest := &pb.MinerStartRequest{
-		OrderId:       request.GetOrderId(),
+		OrderId:       request.GetDealId(),
 		Id:            taskID,
 		Registry:      request.GetRegistry(),
 		Image:         request.GetImage(),
@@ -371,9 +457,9 @@ func (h *Hub) startTask(ctx context.Context, request *structs.StartTaskRequest) 
 	routes := miner.registerRoutes(taskID, response.GetRoutes())
 
 	// TODO: Synchronize routes with the cluster.
-
 	reply := &pb.HubStartTaskReply{
-		Id: taskID,
+		Id:      taskID,
+		HubAddr: h.ethAddr,
 	}
 
 	for _, route := range routes {
@@ -565,6 +651,7 @@ func (h *Hub) ProposeDeal(ctx context.Context, r *pb.DealRequest) (*pb.Empty, er
 		int64(resources.GetMemoryInBytes()),
 		resources.GetGPUCount(),
 	)
+
 	miner, err := h.findRandomMinerByUsage(&usage)
 	if err != nil {
 		return nil, err
@@ -574,7 +661,6 @@ func (h *Hub) ProposeDeal(ctx context.Context, r *pb.DealRequest) (*pb.Empty, er
 	}
 
 	h.waiter.Go(h.getDealWaiter(ctx, request))
-	h.waiter.Wait()
 
 	return &pb.Empty{}, nil
 }
@@ -617,7 +703,7 @@ func (h *Hub) findRandomMinerByUsage(usage *resource.Resources) (*MinerCtx, erro
 	id := 0
 	var result *MinerCtx = nil
 	for _, miner := range h.miners {
-		if err := miner.PollConsume(usage); err != nil {
+		if err := miner.PollConsume(usage); err == nil {
 			id++
 			threshold := 1.0 / float64(id)
 			if rg.Float64() < threshold {
@@ -857,6 +943,11 @@ func New(ctx context.Context, cfg *Config, version string, opts ...Option) (*Hub
 		}
 	}()
 
+	if os.Getenv("GRPC_INSECURE") != "" {
+		defaults.rot = nil
+		defaults.creds = nil
+	}
+
 	ip := cfg.EndpointIP()
 	clientPort, err := util.ParseEndpointPort(cfg.Cluster.Endpoint)
 	if err != nil {
@@ -888,13 +979,13 @@ func New(ctx context.Context, cfg *Config, version string, opts ...Option) (*Hub
 		}
 	}
 
-	ethWrapper, err := NewETH(ctx, defaults.ethKey, defaults.bcr)
+	ethWrapper, err := NewETH(ctx, defaults.ethKey, defaults.bcr, defaultDealWaitTimeout)
 	if err != nil {
 		return nil, err
 	}
 
 	if defaults.locator == nil {
-		conn, err := util.MakeGrpcClient(defaults.ctx, cfg.Locator.Address, defaults.creds, grpc.WithTimeout(5*time.Second))
+		conn, err := util.MakeGrpcClient(defaults.ctx, cfg.Locator.Endpoint, defaults.creds)
 		if err != nil {
 			return nil, err
 		}
@@ -902,16 +993,20 @@ func New(ctx context.Context, cfg *Config, version string, opts ...Option) (*Hub
 		defaults.locator = pb.NewLocatorClient(conn)
 	}
 
+	if defaults.market == nil {
+		conn, err := util.MakeGrpcClient(defaults.ctx, cfg.Market.Endpoint, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		defaults.market = pb.NewMarketClient(conn)
+	}
+
 	if defaults.cluster == nil {
 		defaults.cluster, defaults.clusterEvents, err = NewCluster(ctx, &cfg.Cluster, defaults.creds)
 		if err != nil {
 			return nil, err
 		}
-	}
-
-	if os.Getenv("GRPC_INSECURE") != "" {
-		defaults.rot = nil
-		defaults.creds = nil
 	}
 
 	acl := NewACLStorage()

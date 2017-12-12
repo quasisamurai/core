@@ -104,7 +104,7 @@ func (h *Hub) tlsHandshake(ctx context.Context, conn net.Conn) (net.Conn, error)
 
 	switch authInfo := authInfo.(type) {
 	case util.EthAuthInfo:
-		if !h.acl.Has(authInfo.Wallet) {
+		if !h.acl.Has(authInfo.Wallet.Hex()) {
 			return nil, errForbiddenMiner
 		}
 	default:
@@ -308,6 +308,8 @@ func (m *MinerCtx) orderUsage(id OrderId) (*resource.Resources, error) {
 
 // Orders returns a list of allocated orders.
 // Useful for looking for a proper miner for starting tasks.
+//
+// TODO: rename to Deals()
 func (m *MinerCtx) Orders() []OrderId {
 	m.mu.Lock()
 	defer m.mu.Unlock()

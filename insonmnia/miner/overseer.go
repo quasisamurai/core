@@ -38,6 +38,7 @@ type Description struct {
 	Cmd           []string
 	Env           map[string]string
 	TaskId        string
+	DealId        string
 	CommitOnStop  bool
 
 	GPURequired bool
@@ -54,13 +55,15 @@ func (d *Description) FormatEnv() []string {
 
 // ContainerInfo is a brief information about containers
 type ContainerInfo struct {
-	status    *pb.TaskStatusReply
-	ID        string
-	ImageName string
-	StartAt   time.Time
-	Ports     nat.PortMap
-	Resources resource.Resources
-	PublicKey ssh.PublicKey
+	status       *pb.TaskStatusReply
+	ID           string
+	ImageName    string
+	StartAt      time.Time
+	Ports        nat.PortMap
+	Resources    resource.Resources
+	PublicKey    ssh.PublicKey
+	Cgroup       string
+	CgroupParent string
 }
 
 // ContainerMetrics are metrics collected from Docker about running containers
@@ -100,6 +103,9 @@ type ExecConnection types.HijackedResponse
 type Overseer interface {
 	// Load loads an image from the specified reader to the Docker.
 	Load(ctx context.Context, rd io.Reader) (imageLoadStatus, error)
+
+	// Save saves an image from the Docker into the returned reader.
+	Save(ctx context.Context, imageID string) (types.ImageInspect, io.ReadCloser, error)
 
 	// Spool prepares an application for its further start.
 	//
@@ -374,6 +380,20 @@ func (o *overseer) Load(ctx context.Context, rd io.Reader) (imageLoadStatus, err
 	return decodeImageLoad(response)
 }
 
+func (o *overseer) Save(ctx context.Context, imageID string) (types.ImageInspect, io.ReadCloser, error) {
+	imageInspect, _, err := o.client.ImageInspectWithRaw(ctx, imageID)
+	if err != nil {
+		return types.ImageInspect{}, nil, err
+	}
+
+	rd, err := o.client.ImageSave(ctx, []string{imageID})
+	if err != nil {
+		return types.ImageInspect{}, nil, err
+	}
+
+	return imageInspect, rd, nil
+}
+
 func (o *overseer) Spool(ctx context.Context, d Description) error {
 	log.G(ctx).Info("pull the application image")
 	options := types.ImagePullOptions{
@@ -427,16 +447,32 @@ func (o *overseer) Start(ctx context.Context, description Description) (status c
 		// NOTE: I don't think it can fail
 		return
 	}
+
+	var cpuCount int
+	if description.Resources.NanoCPUs > 0 {
+		cpuCount = int(description.Resources.NanoCPUs / 1000000000)
+	} else if description.Resources.CPUQuota > 0 && description.Resources.CPUPeriod > 0 {
+		cpuCount = int(description.Resources.CPUQuota / description.Resources.CPUPeriod)
+	} else if description.Resources.CPUCount > 0 {
+		cpuCount = int(description.Resources.CPUCount)
+	} else {
+		cpuCount = 1
+	}
+
 	var gpuCount = 0
 	if description.GPURequired {
 		gpuCount = -1
 	}
+
 	cinfo = ContainerInfo{
-		status:    &pb.TaskStatusReply{Status: pb.TaskStatusReply_RUNNING},
-		ID:        cjson.ID,
-		Ports:     cjson.NetworkSettings.Ports,
-		Resources: resource.NewResources(1, description.Resources.Memory, gpuCount),
+		status:       &pb.TaskStatusReply{Status: pb.TaskStatusReply_RUNNING},
+		ID:           cjson.ID,
+		Ports:        cjson.NetworkSettings.Ports,
+		Resources:    resource.NewResources(cpuCount, description.Resources.Memory, gpuCount),
+		Cgroup:       string(cjson.HostConfig.Cgroup),
+		CgroupParent: string(cjson.HostConfig.CgroupParent),
 	}
+
 	return status, cinfo, nil
 }
 

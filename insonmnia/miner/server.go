@@ -267,11 +267,45 @@ func transformRestartPolicy(p *pb.ContainerRestartPolicy) container.RestartPolic
 }
 
 func (m *Miner) Load(stream pb.Miner_LoadServer) error {
+	log.G(m.ctx).Info("handling Load request")
+
 	result, err := m.ovs.Load(stream.Context(), newChunkReader(stream))
 	if err != nil {
 		return err
 	}
+
+	log.G(m.ctx).Info("image loaded, set trailer", zap.String("trailer", result.Status))
 	stream.SetTrailer(metadata.Pairs("status", result.Status))
+	return nil
+}
+
+func (m *Miner) Save(request *pb.SaveRequest, stream pb.Miner_SaveServer) error {
+	log.G(m.ctx).Info("handling Save request", zap.Any("request", request))
+
+	info, rd, err := m.ovs.Save(stream.Context(), request.ImageID)
+	if err != nil {
+		return err
+	}
+	defer rd.Close()
+
+	stream.SendHeader(metadata.Pairs("size", strconv.FormatInt(info.Size, 10)))
+
+	streaming := true
+	buf := make([]byte, 1*1024*1024)
+	for streaming {
+		n, err := rd.Read(buf)
+		if err != nil {
+			if err == io.EOF {
+				streaming = false
+			} else {
+				return err
+			}
+		}
+		if err := stream.Send(&pb.Chunk{Chunk: buf[:n]}); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -302,6 +336,7 @@ func (m *Miner) Start(ctx context.Context, request *pb.MinerStartRequest) (*pb.M
 		Auth:          request.Auth,
 		RestartPolicy: transformRestartPolicy(request.RestartPolicy),
 		Resources:     resources.ToContainerResources(cgroup.Suffix()),
+		DealId:        request.GetOrderId(),
 		TaskId:        request.Id,
 		CommitOnStop:  request.CommitOnStop,
 		Env:           request.Env,
@@ -545,6 +580,13 @@ func (m *Miner) TaskDetails(ctx context.Context, req *pb.ID) (*pb.TaskStatusRepl
 		Ports:     string(portsStr),
 		Uptime:    uint64(time.Now().UnixNano() - info.StartAt.UnixNano()),
 		Usage:     metric.Marshal(),
+		AvailableResources: &pb.AvailableResources{
+			NumCPUs:      int64(info.Resources.NumCPUs),
+			NumGPUs:      int64(info.Resources.NumGPUs),
+			Memory:       uint64(info.Resources.Memory),
+			Cgroup:       info.ID,
+			CgroupParent: info.CgroupParent,
+		},
 	}
 
 	return reply, nil

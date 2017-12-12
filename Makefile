@@ -7,9 +7,13 @@ GOCMD=./cmd
 ifeq ($(GO), )
     GO=go
 endif
+
+ifeq ($(GOPATH), )
+    GOPATH=$(shell ls -d ~/go)
+endif
+
 INSTALLDIR=${GOPATH}/bin/
 
-BOOTNODE=sonmbootnode
 MINER=sonmminer
 HUB=sonmhub
 CLI=sonmcli
@@ -40,10 +44,6 @@ all: mock vet fmt build test
 build/locator:
 	@echo "+ $@"
 	${GO} build -tags "$(TAGS)" -ldflags "-s -X main.version=$(FULL_VER)" -o ${LOCATOR} ${GOCMD}/locator
-
-build/bootnode:
-	@echo "+ $@"
-	${GO} build -tags "$(TAGS)" -ldflags "-s -X main.version=$(FULL_VER)" -o ${BOOTNODE} ${GOCMD}/bootnode
 
 build/miner:
 	@echo "+ $@"
@@ -78,34 +78,12 @@ build/insomnia: build/hub build/miner build/cli build/node
 
 build/aux: build/locator build/marketplace
 
-build: build/bootnode build/insomnia build/aux
+build: build/insomnia build/aux
 
-install/bootnode: build/bootnode
+install: all
 	@echo "+ $@"
 	mkdir -p ${INSTALLDIR}
-	cp ${BOOTNODE} ${INSTALLDIR}
-
-install/miner: build/miner
-	@echo "+ $@"
-	mkdir -p ${INSTALLDIR}
-	cp ${MINER} ${INSTALLDIR}
-
-install/hub: build/hub
-	@echo "+ $@"
-	mkdir -p ${INSTALLDIR}
-	cp ${HUB} ${INSTALLDIR}
-
-install/cli: build/cli
-	@echo "+ $@"
-	mkdir -p ${INSTALLDIR}
-	cp ${CLI} ${INSTALLDIR}
-
-install/node: build/node
-	@echo "+ $@"
-	mkdir -p ${INSTALLDIR}
-	cp ${LOCAL_NODE} ${INSTALLDIR}
-
-install: install/bootnode install/miner install/hub install/cli
+	cp ${MINER} ${HUB} ${CLI} ${LOCATOR} ${MARKET} ${LOCAL_NODE} ${INSTALLDIR}
 
 vet:
 	@echo "+ $@"
@@ -151,7 +129,7 @@ mock:
 		"github.com/sonm-io/core/proto" HubClient && ${SED}
 
 clean:
-	rm -f ${MINER} ${HUB} ${CLI} ${BOOTNODE} ${MARKET}
+	rm -f ${MINER} ${HUB} ${CLI} ${MARKET}
 
 deb:
 	debuild --no-lintian --preserve-env -uc -us -i -I
