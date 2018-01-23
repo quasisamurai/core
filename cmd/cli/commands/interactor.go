@@ -5,8 +5,9 @@ import (
 
 	"github.com/sonm-io/core/insonmnia/structs"
 	pb "github.com/sonm-io/core/proto"
-	"github.com/sonm-io/core/util"
+	"github.com/sonm-io/core/util/xgrpc"
 	"golang.org/x/net/context"
+	"google.golang.org/grpc"
 )
 
 type NodeHubInteractor interface {
@@ -24,7 +25,7 @@ type NodeHubInteractor interface {
 	SetDeviceProperties(ID string, properties map[string]float64) (*pb.Empty, error)
 
 	GetAskPlans() (*pb.SlotsReply, error)
-	CreateAskPlan(slot *structs.Slot, price string) (*pb.ID, error)
+	CreateAskPlan(req *pb.InsertSlotRequest) (*pb.ID, error)
 	RemoveAskPlan(id string) (*pb.Empty, error)
 
 	TaskList() (*pb.TaskListReply, error)
@@ -115,14 +116,10 @@ func (it *hubInteractor) GetAskPlans() (*pb.SlotsReply, error) {
 	return it.hub.GetAskPlans(ctx, &pb.Empty{})
 }
 
-func (it *hubInteractor) CreateAskPlan(slot *structs.Slot, price string) (*pb.ID, error) {
+func (it *hubInteractor) CreateAskPlan(req *pb.InsertSlotRequest) (*pb.ID, error) {
 	ctx, cancel := ctx(it.timeout)
 	defer cancel()
 
-	req := &pb.InsertSlotRequest{
-		Price: price,
-		Slot:  slot.Unwrap(),
-	}
 	return it.hub.CreateAskPlan(ctx, req)
 }
 
@@ -149,7 +146,7 @@ func (it *hubInteractor) TaskStatus(id string) (*pb.TaskStatusReply, error) {
 }
 
 func NewHubInteractor(addr string, timeout time.Duration) (NodeHubInteractor, error) {
-	cc, err := util.MakeGrpcClient(context.Background(), addr, creds)
+	cc, err := xgrpc.NewWalletAuthenticatedClient(context.Background(), creds, addr)
 	if err != nil {
 		return nil, err
 	}
@@ -178,9 +175,11 @@ func (it *marketInteractor) GetOrders(slot *structs.Slot, orderType pb.OrderType
 	defer cancel()
 
 	req := &pb.GetOrdersRequest{
-		Slot:      slot.Unwrap(),
-		OrderType: orderType,
-		Count:     count,
+		Order: &pb.Order{
+			Slot:      slot.Unwrap(),
+			OrderType: orderType,
+		},
+		Count: count,
 	}
 
 	reply, err := it.market.GetOrders(ctx, req)
@@ -225,7 +224,7 @@ func ctx(timeout time.Duration) (context.Context, context.CancelFunc) {
 }
 
 func NewMarketInteractor(addr string, timeout time.Duration) (NodeMarketInteractor, error) {
-	cc, err := util.MakeGrpcClient(context.Background(), addr, creds)
+	cc, err := xgrpc.NewWalletAuthenticatedClient(context.Background(), creds, addr)
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +240,7 @@ func NewMarketInteractor(addr string, timeout time.Duration) (NodeMarketInteract
 
 type DealsInteractor interface {
 	List(from string, status pb.DealStatus) ([]*pb.Deal, error)
-	Status(id string) (*pb.Deal, error)
+	Status(id string) (*pb.DealStatusReply, error)
 	FinishDeal(id string) error
 }
 
@@ -263,7 +262,7 @@ func (it *dealsInteractor) List(from string, status pb.DealStatus) ([]*pb.Deal, 
 	return reply.GetDeal(), nil
 }
 
-func (it *dealsInteractor) Status(id string) (*pb.Deal, error) {
+func (it *dealsInteractor) Status(id string) (*pb.DealStatusReply, error) {
 	ctx, cancel := ctx(it.timeout)
 	defer cancel()
 
@@ -279,7 +278,7 @@ func (it *dealsInteractor) FinishDeal(id string) error {
 }
 
 func NewDealsInteractor(addr string, timeout time.Duration) (DealsInteractor, error) {
-	cc, err := util.MakeGrpcClient(context.Background(), addr, creds)
+	cc, err := xgrpc.NewWalletAuthenticatedClient(context.Background(), creds, addr)
 	if err != nil {
 		return nil, err
 	}
@@ -295,9 +294,9 @@ type TasksInteractor interface {
 	ImagePush(ctx context.Context) (pb.Hub_PushTaskClient, error)
 	Start(req *pb.HubStartTaskRequest) (*pb.HubStartTaskReply, error)
 	Status(id, hub string) (*pb.TaskStatusReply, error)
-	Logs(req *pb.TaskLogsRequest) (pb.TaskManagement_LogsClient, error)
+	Logs(ctx context.Context, req *pb.TaskLogsRequest) (pb.TaskManagement_LogsClient, error)
 	Stop(id, hub string) (*pb.Empty, error)
-	ImagePull(dealID, name, taskID string) (pb.Hub_PullTaskClient, error)
+	ImagePull(dealID, taskID string) (pb.Hub_PullTaskClient, error)
 }
 
 type tasksInteractor struct {
@@ -331,10 +330,7 @@ func (it *tasksInteractor) Status(id, hub string) (*pb.TaskStatusReply, error) {
 	return it.tasks.Status(ctx, &pb.TaskID{Id: id, HubAddr: hub})
 }
 
-func (it *tasksInteractor) Logs(req *pb.TaskLogsRequest) (pb.TaskManagement_LogsClient, error) {
-	ctx, cancel := ctx(it.timeout)
-	defer cancel()
-
+func (it *tasksInteractor) Logs(ctx context.Context, req *pb.TaskLogsRequest) (pb.TaskManagement_LogsClient, error) {
 	return it.tasks.Logs(ctx, req)
 }
 
@@ -345,20 +341,19 @@ func (it *tasksInteractor) Stop(id, hub string) (*pb.Empty, error) {
 	return it.tasks.Stop(ctx, &pb.TaskID{Id: id, HubAddr: hub})
 }
 
-func (it *tasksInteractor) ImagePull(dealID, name, taskID string) (pb.Hub_PullTaskClient, error) {
+func (it *tasksInteractor) ImagePull(dealID, taskID string) (pb.Hub_PullTaskClient, error) {
 	ctx := context.Background()
 
 	req := &pb.PullTaskRequest{
 		DealId: dealID,
-		Name:   name,
 		TaskId: taskID,
 	}
 
 	return it.tasks.PullTask(ctx, req)
 }
 
-func NewTasksInteractor(addr string, timeout time.Duration) (TasksInteractor, error) {
-	cc, err := util.MakeGrpcClient(context.Background(), addr, creds)
+func NewTasksInteractor(addr string, timeout time.Duration, opts ...grpc.DialOption) (TasksInteractor, error) {
+	cc, err := xgrpc.NewWalletAuthenticatedClient(context.Background(), creds, addr, opts...)
 	if err != nil {
 		return nil, err
 	}

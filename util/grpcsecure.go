@@ -6,21 +6,10 @@ import (
 	"net"
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
+	"github.com/sonm-io/core/insonmnia/auth"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc/credentials"
 )
-
-// EthAuthInfo implements credentials.AuthInfo
-// It provides access to a wallet of a connected user
-type EthAuthInfo struct {
-	TLS    credentials.TLSInfo
-	Wallet ethcommon.Address
-}
-
-// AuthType implements credentials.AuthInfo interface
-func (e EthAuthInfo) AuthType() string {
-	return "ETH+" + e.TLS.AuthType()
-}
 
 type tlsVerifier struct {
 	credentials.TransportCredentials
@@ -68,10 +57,10 @@ func verifyCertificate(authInfo credentials.AuthInfo) (credentials.AuthInfo, err
 		if err != nil {
 			return nil, err
 		}
-		if !ethcommon.IsHex(wallet) {
+		if !ethcommon.IsHexAddress(wallet) {
 			return nil, fmt.Errorf("%s is not a valid eth Address", wallet)
 		}
-		return EthAuthInfo{TLS: authInfo, Wallet: ethcommon.HexToAddress(wallet)}, nil
+		return auth.EthAuthInfo{TLS: authInfo, Wallet: ethcommon.HexToAddress(wallet)}, nil
 	default:
 		return nil, fmt.Errorf("unsupported AuthInfo %s %T", authInfo.AuthType(), authInfo)
 	}

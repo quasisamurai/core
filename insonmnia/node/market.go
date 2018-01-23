@@ -3,12 +3,16 @@ package node
 import (
 	"crypto/ecdsa"
 	"fmt"
+	"io"
+	"math/big"
 	"sync"
 	"time"
 
+	"github.com/cnf/structhash"
 	log "github.com/noxiouz/zapctx/ctxlog"
 	"github.com/pkg/errors"
 	"github.com/sonm-io/core/blockchain"
+	"github.com/sonm-io/core/blockchain/tsc"
 	"github.com/sonm-io/core/insonmnia/structs"
 	pb "github.com/sonm-io/core/proto"
 	"github.com/sonm-io/core/util"
@@ -17,11 +21,12 @@ import (
 )
 
 var (
-	errNoHandlerWithID    = errors.New("cannot get handler with ID")
-	errCannotProposeOrder = errors.New("cannot propose order")
-	errNoMatchingOrder    = errors.New("cannot find matching ASK order")
-	errNotAnBidOrder      = errors.New("can create only Orders with type BID")
-	errProposeNotAccepted = errors.New("no one hub accept proposed deal")
+	errCannotProposeOrder  = errors.New("cannot propose order")
+	errNoMatchingOrder     = errors.New("cannot find matching ASK order")
+	errNotAnBidOrder       = errors.New("can create only Orders with type BID")
+	errProposeNotAccepted  = errors.New("no one hub accept proposed deal")
+	errLackOfBalance       = errors.New("lack of balance or allowance for order")
+	errHubEndpointIsNotSet = errors.New("hub endpoint is not configured, please check Node settings")
 )
 
 const (
@@ -73,6 +78,7 @@ func HandlerStatusString(status uint8) string {
 // In any internal error -> status = "Failed"
 
 type orderHandler struct {
+	sync.Mutex
 	id     string
 	order  *pb.Order
 	status uint8
@@ -113,19 +119,39 @@ func newOrderHandler(ctx context.Context, loc pb.LocatorClient, bc blockchain.Bl
 // setError keeps error into handler struct and
 // changes task status to "failed"
 func (h *orderHandler) setError(err error) {
+	h.Lock()
+	defer h.Unlock()
+
 	h.status = statusFailed
 	h.err = err
+}
+
+func (h *orderHandler) setStatus(s uint8) {
+	h.Lock()
+	defer h.Unlock()
+
+	h.status = s
+}
+
+func (h *orderHandler) getStatus() uint8 {
+	h.Lock()
+	defer h.Unlock()
+
+	return h.status
 }
 
 // search searches for matching orders on Marketplace
 func (h *orderHandler) search(m pb.MarketClient) ([]*pb.Order, error) {
 	log.G(h.ctx).Info("searching for orders")
-	h.status = statusSearching
+	h.setStatus(statusSearching)
 
 	req := &pb.GetOrdersRequest{
-		Slot:      h.order.GetSlot(),
-		OrderType: pb.OrderType_ASK,
-		Count:     100,
+		Order: &pb.Order{
+			SupplierID: h.order.SupplierID,
+			OrderType:  pb.OrderType_ASK,
+			Slot:       h.order.GetSlot(),
+		},
+		Count: 100,
 	}
 
 	reply, err := m.GetOrders(h.ctx, req)
@@ -139,113 +165,105 @@ func (h *orderHandler) search(m pb.MarketClient) ([]*pb.Order, error) {
 // resolveHubAddr resolving Hub IP addr from Hub's Eth address
 // via Locator service
 func (h *orderHandler) resolveHubAddr(ethAddr string) (string, error) {
-	log.G(h.ctx).Info("resolving Hub IP ip", zap.String("eth_addr", ethAddr))
 	req := &pb.ResolveRequest{EthAddr: ethAddr}
 	reply, err := h.locator.Resolve(h.ctx, req)
 	if err != nil {
 		return "", err
 	}
 
-	ip := reply.IpAddr[0]
+	ip := reply.Endpoints[0]
 	log.G(h.ctx).Info("hub ip resolved successful", zap.String("ip", ip))
+
 	return ip, nil
 }
 
-// propose proposes createDeal to Hub
-func (h *orderHandler) propose(askID, supID string) error {
-	h.status = statusProposing
-
-	hubIP, err := h.resolveHubAddr(supID)
+func (h *orderHandler) makeHubClient(ethAddr string) (pb.HubClient, io.Closer, error) {
+	hubIP, err := h.resolveHubAddr(ethAddr)
 	if err != nil {
 		log.G(h.ctx).Info("cannot resolve Hub IP", zap.Error(err))
 		h.setError(err)
-		return err
+		return nil, nil, err
 	}
 
-	hub, err := h.hubCreator(hubIP)
+	hub, cc, err := h.hubCreator(hubIP)
 	if err != nil {
 		log.G(h.ctx).Info("cannot create Hub gRPC client", zap.Error(err))
 		h.setError(err)
-		return err
+		return nil, nil, err
 	}
 
-	// TODO(sshaman1101): spec hash required here
-	req := &pb.DealRequest{BidId: h.order.Id, AskId: askID, Order: h.order, SpecHash: "0"}
-	_, err = hub.ProposeDeal(h.ctx, req)
+	log.G(h.ctx).Info("hub connection built", zap.String("hub_ip", hubIP))
+	return hub, cc, nil
+}
+
+// propose proposes new deal to the Hub
+func (h *orderHandler) propose(req *pb.DealRequest, hubClient pb.HubClient) error {
+	h.setStatus(statusProposing)
+
+	_, err := hubClient.ProposeDeal(h.ctx, req)
 	if err != nil {
-		log.G(h.ctx).Info("cannot propose createDeal to Hub", zap.Error(err))
+		log.G(h.ctx).Info("cannot propose openDeal to Hub", zap.Error(err))
 		return errCannotProposeOrder
 	}
 
-	log.G(h.ctx).Info("order proposed successfully", zap.String("hub_ip", hubIP))
+	log.G(h.ctx).Info("order proposed successfully")
 	return nil
 }
 
-// createDeal creates deal on Etherum blockchain
-func (h *orderHandler) createDeal(order *pb.Order, key *ecdsa.PrivateKey) error {
+// openDeal creates deal on Ethereum blockchain
+func (h *orderHandler) openDeal(order *pb.Order, key *ecdsa.PrivateKey, wait time.Duration) (*big.Int, error) {
 	log.G(h.ctx).Info("creating deal on Etherum")
-	h.status = statusDealing
+	h.setStatus(statusDealing)
 
 	deal := &pb.Deal{
-		SupplierID: order.GetSupplierID(),
-		BuyerID:    util.PubKeyToAddr(key.PublicKey),
-		Price:      order.Price,
-		Status:     pb.DealStatus_PENDING,
-		// TODO(sshaman1101): calculate hash
-		SpecificationHash: "0",
+		WorkTime:          h.order.GetSlot().GetDuration(),
+		SupplierID:        order.GetSupplierID(),
+		BuyerID:           util.PubKeyToAddr(key.PublicKey).Hex(),
+		Price:             pb.NewBigInt(structs.CalculateTotalPrice(h.order)),
+		Status:            pb.DealStatus_PENDING,
+		SpecificationHash: h.slotSpecHash(),
 	}
 
-	tx, err := h.bc.OpenDeal(key, deal)
+	txID, err := h.bc.OpenDealPending(h.ctx, key, deal, wait)
 	if err != nil {
 		log.G(h.ctx).Info("cannot open deal", zap.Error(err))
 		h.setError(err)
-		return err
+		return nil, err
 	}
 
-	log.G(h.ctx).Info("deal created", zap.String("tx_id", tx.Hash().String()))
+	log.G(h.ctx).Info("deal opened", zap.String("tx_id", txID.String()))
+	return txID, nil
+}
+
+// approveOnHub send deal to the Hub and wait for approval on Hub-side
+func (h *orderHandler) approveOnHub(req *pb.ApproveDealRequest, hub pb.HubClient) error {
+	log.G(h.ctx).Info("waiting for deal become approved")
+	h.setStatus(statusWaitForApprove)
+
+	_, err := hub.ApproveDeal(h.ctx, req)
+	if err != nil {
+		h.setError(fmt.Errorf("cannot approve deal: %v", err))
+		return h.err
+	}
+
 	return nil
 }
 
-func (h *orderHandler) waitForApprove(order *pb.Order, key *ecdsa.PrivateKey, wait time.Duration) (*pb.Deal, error) {
-	log.G(h.ctx).Info("waiting for deal become approved")
-	h.status = statusWaitForApprove
-
-	localCtx := context.Background()
-	// TODO(sshaman1101): calculate hash
-	deal, err := h.findDeals(localCtx, key, order.GetSupplierID(), "0", wait)
-	if err != nil {
-		log.G(h.ctx).Info("cannot find accepted deal", zap.Error(err))
-		h.setError(err)
-		return nil, err
-	}
-
-	if deal == nil {
-		log.G(h.ctx).Info("deal was not accepted, fail by timeout")
-		err = errors.New("deal was not accepted")
-		h.setError(err)
-		return nil, err
-	}
-
-	h.dealID = deal.Id
-	log.G(h.ctx).Info("deal approved, ready to allocate task", zap.String("deal_id", deal.Id))
-	return deal, nil
-}
-
-func (h *orderHandler) findDeals(ctx context.Context, key *ecdsa.PrivateKey, addr, hash string, wait time.Duration) (*pb.Deal, error) {
+func (h *orderHandler) pollForApprovedStatus(key *ecdsa.PrivateKey, dealID *big.Int, wait time.Duration) (*pb.Deal, error) {
 	ctx, cancel := context.WithTimeout(h.ctx, wait)
 	defer cancel()
 
 	tk := time.NewTicker(3 * time.Second)
 	defer tk.Stop()
 
-	if deal := h.findDealOnce(key, addr, hash); deal != nil {
+	if deal := h.findDealOnce(key, dealID); deal != nil {
 		return deal, nil
 	}
 
 	for {
 		select {
 		case <-tk.C:
-			if deal := h.findDealOnce(key, addr, hash); deal != nil {
+			if deal := h.findDealOnce(key, dealID); deal != nil {
 				return deal, nil
 			}
 		case <-ctx.Done():
@@ -254,25 +272,11 @@ func (h *orderHandler) findDeals(ctx context.Context, key *ecdsa.PrivateKey, add
 	}
 }
 
-func (h *orderHandler) findDealOnce(key *ecdsa.PrivateKey, addr, hash string) *pb.Deal {
+func (h *orderHandler) findDealOnce(key *ecdsa.PrivateKey, dealID *big.Int) *pb.Deal {
 	// get deals opened by our client
-	IDs, err := h.bc.GetAcceptedDeal(util.PubKeyToAddr(key.PublicKey), addr)
-	if err != nil {
-		return nil
-	}
-
-	for _, id := range IDs {
-		// then get extended info
-		deal, err := h.bc.GetDealInfo(id)
-		if err != nil {
-			continue
-		}
-
-		// then check for status
-		// and check if task hash is equal with request's one
-		if deal.GetStatus() == pb.DealStatus_ACCEPTED && deal.GetSpecificationHash() == hash {
-			return deal
-		}
+	deal, err := h.bc.GetDealInfo(dealID)
+	if err == nil && deal.Status == pb.DealStatus_ACCEPTED {
+		return deal
 	}
 
 	return nil
@@ -281,6 +285,7 @@ func (h *orderHandler) findDealOnce(key *ecdsa.PrivateKey, addr, hash string) *p
 type marketAPI struct {
 	remotes *remoteOptions
 	ctx     context.Context
+
 	taskMux sync.Mutex
 	tasks   map[string]*orderHandler
 }
@@ -300,29 +305,39 @@ func (m *marketAPI) registerHandler(id string, t *orderHandler) {
 	m.tasks[id] = t
 }
 
+func (m *marketAPI) countHandlers() int {
+	m.taskMux.Lock()
+	defer m.taskMux.Unlock()
+
+	return len(m.tasks)
+}
+
 func (m *marketAPI) GetOrders(ctx context.Context, req *pb.GetOrdersRequest) (*pb.GetOrdersReply, error) {
-	log.G(m.ctx).Info("handling GetOrders request")
 	return m.remotes.market.GetOrders(ctx, req)
 }
 
 func (m *marketAPI) GetOrderByID(ctx context.Context, req *pb.ID) (*pb.Order, error) {
-	log.G(m.ctx).Info("handling GetOrderByID request", zap.String("id", req.Id))
 	return m.remotes.market.GetOrderByID(ctx, req)
 }
 
 func (m *marketAPI) CreateOrder(ctx context.Context, req *pb.Order) (*pb.Order, error) {
-	log.G(m.ctx).Info("handling CreateOrder request")
-
 	if req.OrderType != pb.OrderType_BID {
 		return nil, errNotAnBidOrder
 	}
 
-	req.ByuerID = util.PubKeyToAddr(m.remotes.key.PublicKey)
+	if _, err := structs.NewOrder(req); err != nil {
+		return nil, err
+	}
+
+	req.ByuerID = util.PubKeyToAddr(m.remotes.key.PublicKey).Hex()
 	created, err := m.remotes.market.CreateOrder(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 
+	// Marketplace knows nothing about the required duration, we must bypass it by hand.
+	// Looks awful, but nevermind, it feels like out timing system is broken by design.
+	created.Slot.Duration = req.GetSlot().GetDuration()
 	go m.startExecOrderHandler(created)
 
 	return created, nil
@@ -342,19 +357,6 @@ func (m *marketAPI) startExecOrderHandler(ord *pb.Order) {
 
 	m.registerHandler(handler.id, handler)
 
-	// remove order from Market if deal was make
-	defer func() {
-		err := m.removeOrderHandler(handler.id)
-		if err != nil {
-			log.G(m.ctx).Info("cannot remove order handler", zap.String("handler_id", handler.id))
-		}
-
-		_, err = m.CancelOrder(m.ctx, ord)
-		if err != nil {
-			log.G(handler.ctx).Info("cannot cancel order", zap.String("err", err.Error()))
-		}
-	}()
-
 	// process order (search -> propose -> deal)
 	err = m.orderLoop(handler)
 	if err == nil {
@@ -363,22 +365,52 @@ func (m *marketAPI) startExecOrderHandler(ord *pb.Order) {
 	}
 
 	tk := time.NewTicker(orderPollPeriod)
+	defer tk.Stop()
 
 	for {
 		select {
-		// cancel context to stop polling for ordrs
+		// Cancel context to stop polling for orders.
 		case <-handler.ctx.Done():
-			log.G(handler.ctx).Info("handler is cancelled")
+			log.G(handler.ctx).Info("order handler is cancelled", zap.String("order_id", handler.id))
 			return
-		// retrier for order polling
 		case <-tk.C:
 			err := m.orderLoop(handler)
 			if err == nil {
 				log.G(handler.ctx).Info("order loop complete at n > 1 iteration, exiting")
+
+				_, err := m.remotes.market.CancelOrder(m.ctx, ord)
+				if err != nil {
+					log.G(handler.ctx).Info("cannot cancel order", zap.String("err", err.Error()),
+						zap.String("order_id", handler.id))
+				}
+
 				return
 			}
 		}
 	}
+}
+
+func (m *marketAPI) loadBalanceAndAllowance() (*big.Int, *big.Int, error) {
+	addr := util.PubKeyToAddr(m.remotes.key.PublicKey).Hex()
+	balance, err := m.remotes.eth.BalanceOf(addr)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	allowance, err := m.remotes.eth.AllowanceOf(addr, tsc.DealsAddress)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return balance, allowance, nil
+}
+
+func (m *marketAPI) checkBalanceAndAllowance(price, balance, allowance *big.Int) bool {
+	if balance.Cmp(price) == -1 || allowance.Cmp(price) == -1 {
+		return false
+	}
+
+	return true
 }
 
 // orderLoop searching for orders, iterate found orders and trying to propose deal
@@ -399,12 +431,45 @@ func (m *marketAPI) orderLoop(handler *orderHandler) error {
 		log.G(handler.ctx).Info("found order", zap.Int("count", len(orders)))
 	}
 
-	var orderToDeal *pb.Order = nil
+	balance, allowance, err := m.loadBalanceAndAllowance()
+	if err != nil {
+		log.G(handler.ctx).Error("cannot load balance and allowance", zap.Error(err))
+		handler.setError(err)
+		return err
+	}
+
+	var (
+		orderToDeal *pb.Order
+		hubClient   pb.HubClient
+		cc          io.Closer
+		dealRequest *pb.DealRequest
+	)
 	for _, ord := range orders {
-		err = handler.propose(ord.Id, ord.SupplierID)
+		price := structs.CalculateTotalPrice(ord)
+		if !m.checkBalanceAndAllowance(price, balance, allowance) {
+			log.G(handler.ctx).Info("lack of balance or allowance for order", zap.String("order_id", ord.Id))
+			handler.setError(errLackOfBalance)
+			continue
+		}
+
+		hubClient, cc, err = handler.makeHubClient(ord.SupplierID)
+		if err != nil {
+			log.G(handler.ctx).Info("cannot create hub client", zap.Error(err))
+			handler.setError(err)
+			continue
+		}
+
+		dealRequest = &pb.DealRequest{
+			AskId:    ord.GetId(),
+			BidId:    handler.order.GetId(),
+			SpecHash: handler.slotSpecHash(),
+		}
+
+		err = handler.propose(dealRequest, hubClient)
 		if err != nil {
 			if err == errCannotProposeOrder {
 				log.G(handler.ctx).Info("cannot propose order, trying next order")
+				cc.Close()
 				continue
 			}
 		} else {
@@ -421,38 +486,73 @@ func (m *marketAPI) orderLoop(handler *orderHandler) error {
 		// order still nil - proposeDeal failed for each order for each hub
 		log.G(handler.ctx).Info("no one hub accept proposed deal")
 		handler.setError(errProposeNotAccepted)
-		return err
+		return errProposeNotAccepted
 	}
 
-	err = handler.createDeal(orderToDeal, m.remotes.key)
+	defer cc.Close()
+
+	dealID, err := handler.openDeal(orderToDeal, m.remotes.key, m.remotes.dealCreateTimeout)
 	if err != nil {
 		log.G(handler.ctx).Info("cannot create deal", zap.Error(err))
 		handler.setError(err)
 		return err
 	}
 
-	deal, err := handler.waitForApprove(orderToDeal, m.remotes.key, m.remotes.approveTimeout)
+	approveRequest := &pb.ApproveDealRequest{
+		DealID: pb.NewBigInt(dealID),
+		AskID:  orderToDeal.GetId(),
+		BidID:  handler.order.GetId(),
+	}
+
+	err = handler.approveOnHub(approveRequest, hubClient)
 	if err != nil {
 		log.G(handler.ctx).Info("wailed waiting for deal", zap.Error(err))
 		handler.setError(err)
 		return err
 	}
 
+	handler.Lock()
+	handler.err = nil
+	handler.dealID = dealID.String()
 	handler.status = statusDone
+	handler.Unlock()
+
 	log.G(handler.ctx).Info("handler done",
-		zap.String("handle_id", handler.id),
-		zap.String("deal_id", deal.GetId()))
+		zap.String("order_id", handler.id),
+		zap.String("deal_id", dealID.String()))
 	return nil
 }
 
-func (m *marketAPI) CancelOrder(ctx context.Context, req *pb.Order) (*pb.Empty, error) {
-	log.G(m.ctx).Info("handling CancelOrder request", zap.String("id", req.Id))
-	return m.remotes.market.CancelOrder(ctx, req)
+func (m *marketAPI) CancelOrder(ctx context.Context, order *pb.Order) (*pb.Empty, error) {
+	order, err := m.GetOrderByID(ctx, &pb.ID{Id: order.Id})
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to resolve order type")
+	}
+
+	if order.OrderType != pb.OrderType_BID {
+		return nil, errors.New(
+			"can only remove bids via Market API; please use Hub ask-plan API to manage asks")
+	}
+
+	repl, err := m.remotes.market.CancelOrder(ctx, order)
+	if err == nil {
+		handler, ok := m.getHandler(order.Id)
+		if ok {
+			handler.setError(errors.New("cancelled by user"))
+			handler.cancel()
+		} else {
+			log.G(m.ctx).Info("no order handler found", zap.String("order_id", order.Id))
+		}
+	}
+
+	return repl, err
+}
+
+func (m *marketAPI) TouchOrders(ctx context.Context, req *pb.TouchOrdersRequest) (*pb.Empty, error) {
+	return m.remotes.market.TouchOrders(ctx, req)
 }
 
 func (m *marketAPI) GetProcessing(ctx context.Context, req *pb.Empty) (*pb.GetProcessingReply, error) {
-	log.G(m.ctx).Info("handling GetProcessing request")
-
 	m.taskMux.Lock()
 	defer m.taskMux.Unlock()
 
@@ -479,15 +579,37 @@ func (m *marketAPI) GetProcessing(ctx context.Context, req *pb.Empty) (*pb.GetPr
 	return reply, nil
 }
 
-// removeOrderHandler must cancel context and DO NOT REMOVE the handler from tasks map
-func (m *marketAPI) removeOrderHandler(id string) error {
-	handlr, ok := m.getHandler(id)
-	if !ok {
-		return errNoHandlerWithID
+// getMyOrders query Marketplace service for orders
+// with type == BID and that placed with current eth address
+func (m *marketAPI) getMyOrders() (*pb.GetOrdersReply, error) {
+	req := &pb.GetOrdersRequest{
+		Order: &pb.Order{
+			ByuerID:   util.PubKeyToAddr(m.remotes.key.PublicKey).Hex(),
+			OrderType: pb.OrderType_BID,
+		},
+	}
+	return m.remotes.market.GetOrders(m.ctx, req)
+}
+
+// restartOrdersProcessing loads BIDs for current account
+// and restarts background processing for that orders
+func (m *marketAPI) restartOrdersProcessing() func() error {
+	return func() error {
+		orders, err := m.getMyOrders()
+		if err != nil {
+			return err
+		}
+
+		log.G(m.ctx).Info("restart order processing",
+			zap.Int("order_count", len(orders.GetOrders())))
+
+		for _, o := range orders.GetOrders() {
+			go m.startExecOrderHandler(o)
+		}
+
+		return nil
 	}
 
-	handlr.cancel()
-	return nil
 }
 
 func newMarketAPI(opts *remoteOptions) (pb.MarketServer, error) {
@@ -496,4 +618,12 @@ func newMarketAPI(opts *remoteOptions) (pb.MarketServer, error) {
 		ctx:     opts.ctx,
 		tasks:   make(map[string]*orderHandler),
 	}, nil
+}
+
+// slotSpecHash hashes handler's order and convert hash to big.Int
+func (h *orderHandler) slotSpecHash() string {
+	s := structhash.Md5(h.order.GetSlot().GetResources(), 1)
+	result := big.NewInt(0).SetBytes(s).String()
+	log.G(h.ctx).Debug("slot hash calculated", zap.String("value", result))
+	return result
 }

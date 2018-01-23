@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/jinzhu/configor"
+	"github.com/sonm-io/core/accounts"
 )
 
 type LoggingConfig struct {
@@ -12,11 +13,6 @@ type LoggingConfig struct {
 
 type GatewayConfig struct {
 	Ports []uint16 `required:"true" yaml:"ports"`
-}
-
-type EthConfig struct {
-	Passphrase string `required:"false" default:"" yaml:"pass_phrase"`
-	Keystore   string `required:"false" default:"" yaml:"key_store"`
 }
 
 type LocatorConfig struct {
@@ -40,6 +36,7 @@ type ClusterConfig struct {
 	Store                        StoreConfig `yaml:"store"`
 	Failover                     bool        `yaml:"failover"`
 	Endpoint                     string      `yaml:"endpoint"`
+	AnnounceEndpoint             string      `yaml:"announce_endpoint"`
 	LeaderKey                    string      `yaml:"leader_key" default:"sonm/hub/leader"`
 	MemberListKey                string      `yaml:"member_list_key" default:"sonm/hub/list"`
 	SynchronizableEntitiesPrefix string      `yaml:"sync_prefix" default:"sonm/hub/sync"`
@@ -49,14 +46,22 @@ type ClusterConfig struct {
 	MemberGCPeriod               uint64      `yaml:"member_gc_period" default:"60"`
 }
 
+type WhitelistConfig struct {
+	Url                 string   `yaml:"url"`
+	Enabled             *bool    `yaml:"enabled" default:"true" required:"true"`
+	PrivilegedAddresses []string `yaml:"privileged_addresses"`
+	RefreshPeriod       uint     `yaml:"refresh_period" default:"60"`
+}
+
 type Config struct {
-	Endpoint      string         `required:"true" yaml:"endpoint"`
-	GatewayConfig *GatewayConfig `yaml:"gateway"`
-	Logging       LoggingConfig  `yaml:"logging"`
-	Eth           EthConfig      `yaml:"ethereum"`
-	Locator       LocatorConfig  `yaml:"locator"`
-	Market        MarketConfig   `yaml:"market"`
-	Cluster       ClusterConfig  `yaml:"cluster"`
+	Endpoint      string             `required:"true" yaml:"endpoint"`
+	GatewayConfig *GatewayConfig     `yaml:"gateway"`
+	Logging       LoggingConfig      `yaml:"logging"`
+	Eth           accounts.EthConfig `yaml:"ethereum"`
+	Locator       LocatorConfig      `yaml:"locator"`
+	Market        MarketConfig       `yaml:"market"`
+	Cluster       ClusterConfig      `yaml:"cluster"`
+	Whitelist     WhitelistConfig    `yaml:"whitelist"`
 }
 
 // NewConfig loads a hub config from the specified YAML file.

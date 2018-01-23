@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"gopkg.in/yaml.v2"
 )
@@ -67,8 +68,8 @@ func PubKeyToString(key ecdsa.PublicKey) string {
 	return fmt.Sprintf("%x", crypto.FromECDSAPub(&key))
 }
 
-func PubKeyToAddr(key ecdsa.PublicKey) string {
-	return crypto.PubkeyToAddress(key).String()
+func PubKeyToAddr(key ecdsa.PublicKey) common.Address {
+	return crypto.PubkeyToAddress(key)
 }
 
 func LoadYamlFile(from string, to interface{}) error {
@@ -133,4 +134,26 @@ func GetAvailableIPs() (availableIPs []net.IP, err error) {
 	}
 
 	return availableIPs, nil
+}
+
+func IsPrivateIP(ip net.IP) bool {
+	return isPrivateIPv4(ip) || isPrivateIPv6(ip)
+}
+
+func isPrivateIPv4(ip net.IP) bool {
+	_, private24BitBlock, _ := net.ParseCIDR("10.0.0.0/8")
+	_, private20BitBlock, _ := net.ParseCIDR("172.16.0.0/12")
+	_, private16BitBlock, _ := net.ParseCIDR("192.168.0.0/16")
+	return private24BitBlock.Contains(ip) ||
+		private20BitBlock.Contains(ip) ||
+		private16BitBlock.Contains(ip) ||
+		ip.IsLoopback() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast()
+}
+
+func isPrivateIPv6(ip net.IP) bool {
+	_, block, _ := net.ParseCIDR("fc00::/7")
+
+	return block.Contains(ip) || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
 }

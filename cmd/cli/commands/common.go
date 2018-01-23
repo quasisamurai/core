@@ -10,6 +10,7 @@ import (
 
 	"github.com/sonm-io/core/accounts"
 	"github.com/sonm-io/core/cmd/cli/config"
+	"github.com/sonm-io/core/insonmnia/auth"
 	"github.com/sonm-io/core/util"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc/credentials"
@@ -26,14 +27,12 @@ const (
 )
 
 var (
-	rootCmd = &cobra.Command{Use: "sonm"}
+	rootCmd = &cobra.Command{Use: "sonmcli"}
 	version string
 
 	// flags var
-	hubAddressFlag  string
 	nodeAddressFlag string
 	outputModeFlag  string
-	insecureFlag    bool
 	timeoutFlag     = 60 * time.Second
 
 	// logging flag vars
@@ -50,7 +49,6 @@ var (
 	creds      credentials.TransportCredentials
 
 	// errors
-	errNotEnoughArguments   = errors.New("not enough arguments")
 	errCannotParsePropsFile = errors.New("cannot parse props file")
 )
 
@@ -58,16 +56,14 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&nodeAddressFlag, "node", "127.0.0.1:9999", "node addr")
 	rootCmd.PersistentFlags().DurationVar(&timeoutFlag, "timeout", 60*time.Second, "Connection timeout")
 	rootCmd.PersistentFlags().StringVar(&outputModeFlag, "out", "", "Output mode: simple or json")
-	rootCmd.PersistentFlags().BoolVar(&insecureFlag, "insecure", false, "disable TLS via components")
 
-	rootCmd.AddCommand(hubRootCmd, nodeMarketRootCmd, nodeDealsRootCmd, nodeTaskRootCmd)
-	rootCmd.AddCommand(loginCmd, approveTokenCmd, versionCmd)
+	rootCmd.AddCommand(hubRootCmd, marketRootCmd, nodeDealsRootCmd, taskRootCmd)
+	rootCmd.AddCommand(loginCmd, approveTokenCmd, getTokenCmd, versionCmd, autoCompleteCmd)
 }
 
 // Root configure and return root command
 func Root(c config.Config) *cobra.Command {
 	cfg = c
-	hubAddressFlag = cfg.HubAddress()
 	rootCmd.SetOutput(os.Stdout)
 	return rootCmd
 }
@@ -168,14 +164,13 @@ func loadKeyStoreWrapper(cmd *cobra.Command, _ []string) {
 
 	sessionKey = key
 
-	if !insecureFlag {
-		_, TLSConfig, err := util.NewHitlessCertRotator(context.Background(), sessionKey)
-		if err != nil {
-			showError(cmd, err.Error(), nil)
-			os.Exit(1)
-		}
-		creds = util.NewTLS(TLSConfig)
+	_, TLSConfig, err := util.NewHitlessCertRotator(context.Background(), sessionKey)
+	if err != nil {
+		showError(cmd, err.Error(), nil)
+		os.Exit(1)
 	}
+
+	creds = auth.NewWalletAuthenticator(util.NewTLS(TLSConfig), util.PubKeyToAddr(sessionKey.PublicKey))
 }
 
 func showJSON(cmd *cobra.Command, s interface{}) {

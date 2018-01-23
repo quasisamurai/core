@@ -3,12 +3,15 @@ package locator
 import (
 	"crypto/ecdsa"
 	"crypto/tls"
+	"os"
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	pb "github.com/sonm-io/core/proto"
 	"github.com/sonm-io/core/util"
+	"github.com/sonm-io/core/util/xgrpc"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/net/context"
 )
@@ -23,80 +26,80 @@ func getTestKey() *ecdsa.PrivateKey {
 }
 
 func TestLocator_Announce(t *testing.T) {
-	lc, err := NewLocator(context.Background(), DefaultConfig(":9090"), key)
+	lc, err := NewLocator(context.Background(), testConfig(":9090"), key)
 	if err != nil {
 		t.Error(err)
 		return
 	}
 
-	lc.putAnnounce(&node{ethAddr: "123"})
-	lc.putAnnounce(&node{ethAddr: "234"})
-	lc.putAnnounce(&node{ethAddr: "345"})
+	put := []string{
+		"123",
+		"234",
+		"345",
+	}
 
-	assert.Len(t, lc.db, 3)
+	for _, addr := range put {
+		lc.put(&record{EthAddr: common.HexToAddress(addr)})
+	}
 
-	lc.putAnnounce(&node{ethAddr: "123"})
-	lc.putAnnounce(&node{ethAddr: "123"})
-	lc.putAnnounce(&node{ethAddr: "123"})
-
-	assert.Len(t, lc.db, 3)
+	for _, addr := range put {
+		rk, err := lc.get(common.HexToAddress(addr))
+		assert.NoError(t, err)
+		assert.Equal(t, rk.EthAddr, common.HexToAddress(addr))
+	}
 }
 
 func TestLocator_Resolve(t *testing.T) {
-	lc, err := NewLocator(context.Background(), DefaultConfig(":9090"), key)
+	lc, err := NewLocator(context.Background(), testConfig(":9090"), key)
 	if err != nil {
 		t.Error(err)
 		return
 	}
 
-	n := &node{ethAddr: "123", ipAddr: []string{"111", "222"}}
-	lc.putAnnounce(n)
+	n := &record{EthAddr: common.HexToAddress("123"), ClientEndpoints: []string{"111", "222"}}
+	lc.put(n)
 
-	n2, err := lc.getResolve("123")
+	n2, err := lc.get(common.HexToAddress("123"))
 	assert.NoError(t, err)
-	assert.Len(t, n2.ipAddr, 2)
+	assert.Len(t, n2.ClientEndpoints, 2)
 }
 
 func TestLocator_Resolve2(t *testing.T) {
-	lc, err := NewLocator(context.Background(), DefaultConfig(":9090"), key)
+	lc, err := NewLocator(context.Background(), testConfig(":9090"), key)
 	if err != nil {
 		t.Error(err)
 		return
 	}
 
-	n := &node{ethAddr: "123", ipAddr: []string{"111", "222"}}
-	lc.putAnnounce(n)
+	n := &record{EthAddr: common.HexToAddress("123"), ClientEndpoints: []string{"111", "222"}}
+	lc.put(n)
 
-	n2, err := lc.getResolve("666")
+	n2, err := lc.get(common.HexToAddress("666"))
 	assert.Equal(t, err, errNodeNotFound)
 	assert.Nil(t, n2)
 }
 
 func TestLocator_Expire(t *testing.T) {
-	conf := &LocatorConfig{
-		ListenAddr:    ":9090",
-		NodeTTL:       2 * time.Second,
-		CleanupPeriod: time.Second,
-	}
-
-	lc, err := NewLocator(context.Background(), conf, key)
+	lc, err := NewLocator(context.Background(), testConfig(":9090"), key)
 	if err != nil {
 		t.Error(err)
 		return
 	}
 
-	lc.putAnnounce(&node{ethAddr: "111"})
-	lc.putAnnounce(&node{ethAddr: "222"})
-	time.Sleep(1 * time.Second)
-	assert.Len(t, lc.db, 2)
-	lc.putAnnounce(&node{ethAddr: "333"})
-	assert.Len(t, lc.db, 3)
-	time.Sleep(1500 * time.Millisecond)
-	assert.Len(t, lc.db, 1)
+	lc.put(&record{EthAddr: common.HexToAddress("111")})
+	time.Sleep(500 * time.Millisecond)
+	rec, err := lc.get(common.HexToAddress("111"))
+	assert.NoError(t, err)
+	assert.Equal(t, rec.EthAddr, common.HexToAddress("111"))
+
+	time.Sleep(1000 * time.Millisecond)
+	rec, err = lc.get(common.HexToAddress("111"))
+	assert.Error(t, err)
+	assert.Nil(t, rec)
 }
 
 func TestLocator_AnnounceExternal(t *testing.T) {
-	lc, err := NewLocator(context.Background(), DefaultConfig("localhost:9090"), key)
+	lc, err := NewLocator(context.Background(), testConfig("localhost:9090"), getTestKey())
 	if err != nil {
 		t.Error(err)
 		return
@@ -108,13 +111,13 @@ func TestLocator_AnnounceExternal(t *testing.T) {
 		}
 	}()
 
-	cert, key, err := util.GenerateCert(key)
+	cert, crtKey, err := util.GenerateCert(key, time.Hour)
 	if err != nil {
 		t.Error(err)
 		return
 	}
 
-	crt, err := tls.X509KeyPair(cert, key)
+	crt, err := tls.X509KeyPair(cert, crtKey)
 	if err != nil {
 		t.Error(err)
 		return
@@ -122,20 +125,102 @@ func TestLocator_AnnounceExternal(t *testing.T) {
 
 	creds := util.NewTLS(&tls.Config{Certificates: []tls.Certificate{crt}, InsecureSkipVerify: true})
 
-	conn, err := util.MakeGrpcClient(context.Background(), "localhost:9090", creds)
+	conn, err := xgrpc.NewClient(context.Background(), "localhost:9090", creds)
 	if err != nil {
 		t.Error(err)
 		return
 	}
 
 	locatorClient := pb.NewLocatorClient(conn)
-	_, err = locatorClient.Announce(context.Background(), &pb.AnnounceRequest{IpAddr: []string{"42.42.42.42"}})
+
+	_, err = locatorClient.Announce(context.Background(), &pb.AnnounceRequest{
+		ClientEndpoints: []string{"192.168.0.0"},
+		WorkerEndpoints: []string{"192.168.0.0"}})
+	assert.Error(t, err)
+
+	_, err = locatorClient.Announce(context.Background(),
+		&pb.AnnounceRequest{
+			ClientEndpoints: []string{"192.168.0.1:10001"},
+			WorkerEndpoints: []string{"192.168.0.1:10002"}})
 	if err != nil {
 		t.Error(err)
 		return
 	}
 
-	if len(lc.db) != 1 {
-		t.Error("Failed to securely announce")
+	rec, err := lc.get(util.PubKeyToAddr(key.PublicKey))
+	assert.NoError(t, err)
+
+	assert.Equal(t, rec.EthAddr, util.PubKeyToAddr(key.PublicKey))
+	assert.Equal(t, rec.ClientEndpoints, []string{"192.168.0.1:10001"})
+	assert.Equal(t, rec.WorkerEndpoints, []string{"192.168.0.1:10002"})
+
+	if err := conn.Close(); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestLocator_SkipPrivateIP(t *testing.T) {
+	cfg := testConfig("localhost:9191")
+	cfg.Store.Endpoint += "-skip-private"
+
+	lc, err := NewLocator(context.Background(), cfg, getTestKey())
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	defer os.Remove(cfg.Store.Endpoint)
+
+	lc.onlyPublicIPs = true
+	go func() {
+		if err := lc.Serve(); err != nil {
+			t.Errorf("Locator server failed: %s", err)
+		}
+	}()
+
+	cert, crtKey, err := util.GenerateCert(key, time.Hour)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	crt, err := tls.X509KeyPair(cert, crtKey)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	creds := util.NewTLS(&tls.Config{Certificates: []tls.Certificate{crt}, InsecureSkipVerify: true})
+
+	conn, err := xgrpc.NewWalletAuthenticatedClient(context.Background(), creds, "localhost:9191")
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	locatorClient := pb.NewLocatorClient(conn)
+	_, err = locatorClient.Announce(context.Background(),
+		&pb.AnnounceRequest{
+			ClientEndpoints: []string{"192.168.0.0:10001"},
+			WorkerEndpoints: []string{"192.168.0.0:10002"}})
+	assert.Error(t, err)
+
+	_, err = locatorClient.Announce(context.Background(),
+		&pb.AnnounceRequest{ClientEndpoints: []string{"192.168.0.0:10001"}})
+	assert.Error(t, err)
+
+	_, err = locatorClient.Announce(context.Background(),
+		&pb.AnnounceRequest{
+			ClientEndpoints: []string{"42.42.42.42:10001", "192.168.0.0:10001"},
+			WorkerEndpoints: []string{"42.42.42.42:10002", "192.168.0.0:10002"}})
+	assert.NoError(t, err)
+
+	rec, err := lc.get(util.PubKeyToAddr(key.PublicKey))
+	assert.NoError(t, err)
+	assert.Equal(t, rec.ClientEndpoints, []string{"42.42.42.42:10001"})
+	assert.Equal(t, rec.WorkerEndpoints, []string{"42.42.42.42:10002"})
+
+	if err := conn.Close(); err != nil {
+		t.Error(err)
 	}
 }

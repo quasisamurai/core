@@ -11,6 +11,7 @@ import (
 	"github.com/sonm-io/core/insonmnia/hardware"
 	"github.com/sonm-io/core/insonmnia/hardware/cpu"
 	"github.com/sonm-io/core/insonmnia/hardware/gpu"
+	"github.com/sonm-io/core/insonmnia/structs"
 	pb "github.com/sonm-io/core/proto"
 	"github.com/sonm-io/core/util"
 	"github.com/stretchr/testify/assert"
@@ -93,18 +94,16 @@ func getTestMarket(ctrl *gomock.Controller) pb.MarketClient {
 	m := pb.NewMockMarketClient(ctrl)
 
 	ord := &pb.Order{
-		Id:        "my-order-id",
-		OrderType: pb.OrderType_BID,
-		Price:     "1000",
-		ByuerID:   addr,
+		Id:             "my-order-id",
+		OrderType:      pb.OrderType_BID,
+		PricePerSecond: pb.NewBigIntFromInt(1000),
+		ByuerID:        addr.Hex(),
 		Slot: &pb.Slot{
 			Resources: &pb.Resources{},
 		},
 	}
 	m.EXPECT().CreateOrder(gomock.Any(), gomock.Any()).AnyTimes().
 		Return(ord, nil).MinTimes(1)
-	//m.EXPECT().GetOrders(gomock.Any(), gomock.Any()).AnyTimes().
-	//	Return(&pb.GetOrdersReply{Orders: []*pb.Order{ord}}, nil)
 	m.EXPECT().CancelOrder(gomock.Any(), gomock.Any()).AnyTimes().
 		Return(&pb.Empty{}, nil).MinTimes(1)
 	return m
@@ -118,6 +117,7 @@ func getTestHubConfig() *Config {
 			Failover: false,
 			Store:    StoreConfig{Type: "boltdb", Endpoint: "tmp/sonm/boltdb", Bucket: "sonm"},
 		},
+		Whitelist: WhitelistConfig{Enabled: new(bool)},
 	}
 }
 
@@ -147,8 +147,9 @@ func TestHubCreateRemoveSlot(t *testing.T) {
 	assert.NoError(t, err)
 
 	req := &pb.InsertSlotRequest{
-		Price: "100",
+		PricePerSecond: pb.NewBigIntFromInt(100),
 		Slot: &pb.Slot{
+			Duration:  uint64(structs.MinSlotDuration.Seconds()),
 			Resources: &pb.Resources{},
 		},
 	}

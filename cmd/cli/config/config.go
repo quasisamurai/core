@@ -12,12 +12,12 @@ import (
 const (
 	OutputModeSimple = "simple"
 	OutputModeJSON   = "json"
-	homeConfigPath   = ".sonm/cli.yaml"
+	homeConfigDir    = ".sonm"
+	configName       = "cli.yaml"
 )
 
 type Config interface {
 	OutputFormat() string
-	HubAddress() string
 	// KeyStorager included into config because of
 	// cli instance must know how to open the keystore
 	accounts.KeyStorager
@@ -25,46 +25,57 @@ type Config interface {
 
 // cliConfig implements Config interface
 type cliConfig struct {
-	HubAddr    string `required:"false" default:"" yaml:"hub_address"`
-	OutFormat  string `required:"false" default:"" yaml:"output_format"`
-	Keystore   string `required:"false" default:"" yaml:"key_store"`
-	Passphrase string `required:"false" default:"" yaml:"pass_phrase"`
+	Eth       accounts.EthConfig `yaml:"ethereum"`
+	OutFormat string             `required:"false" default:"" yaml:"output_format"`
 }
 
 func (cc *cliConfig) OutputFormat() string {
 	return cc.OutFormat
 }
 
-func (cc *cliConfig) HubAddress() string {
-	return cc.HubAddr
-}
-
 func (cc *cliConfig) PassPhrase() string {
-	return cc.Passphrase
+	return cc.Eth.Passphrase
 }
 
 func (cc *cliConfig) KeyStore() string {
-	return cc.Keystore
+	return cc.Eth.Keystore
 }
 
-func (cc *cliConfig) getConfigPath() (string, error) {
+func (cc *cliConfig) getDefaultConfigDir() (string, error) {
 	currentUser, err := user.Current()
 	if err != nil {
 		return "", err
 	}
 
-	cfgPath := path.Join(currentUser.HomeDir, homeConfigPath)
+	dir := path.Join(currentUser.HomeDir, homeConfigDir)
+	return dir, nil
+}
+
+func (cc *cliConfig) getConfigPath(p ...string) (string, error) {
+	var cfgPath string
+	var err error
+
+	if len(p) > 0 && p[0] != "" {
+		cfgPath = p[0]
+	} else {
+		cfgPath, err = cc.getDefaultConfigDir()
+		if err != nil {
+			return "", err
+		}
+	}
+
+	cfgPath = path.Join(cfgPath, configName)
 	return cfgPath, nil
 }
 
 func (cc *cliConfig) fillWithDefaults() {
 	cc.OutFormat = OutputModeSimple
-	cc.HubAddr = ""
 }
 
-func NewConfig() (Config, error) {
+func NewConfig(p ...string) (Config, error) {
 	cfg := &cliConfig{}
-	cfgPath, err := cfg.getConfigPath()
+
+	cfgPath, err := cfg.getConfigPath(p...)
 	if err != nil {
 		return nil, err
 	}

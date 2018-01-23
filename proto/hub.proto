@@ -4,6 +4,7 @@ import "bid.proto";
 import "capabilities.proto";
 import "deal.proto";
 import "insonmnia.proto";
+import "bigint.proto";
 
 package sonm;
 
@@ -30,6 +31,10 @@ service Hub {
     rpc TaskLogs(TaskLogsRequest) returns (stream TaskLogsChunk) {}
 
     rpc ProposeDeal(DealRequest) returns (Empty) {}
+    rpc ApproveDeal(ApproveDealRequest) returns (Empty) {}
+
+    // Note: currently used for testing pusposes.
+    rpc GetDealInfo(ID) returns (DealInfoReply) {}
     rpc DiscoverHub(DiscoverHubRequest) returns (Empty) {}
 
     // Device configuration API.
@@ -49,8 +54,10 @@ service Hub {
     // Note, that this method overrides all previously specified properties.
     rpc SetDeviceProperties(SetDevicePropertiesRequest) returns (Empty) {}
 
+    // Worker ACL management.
+
     // GetRegisteredWorkers returns a list of Worker IDs that
-    // allowed to connet to the Hub
+    // allowed to connect to the Hub.
     rpc GetRegisteredWorkers(Empty) returns (GetRegisteredWorkersReply) {}
     // RegisterWorker adds Worker credentials to be able for them to connect
     // to a Hub.
@@ -111,8 +118,13 @@ message HubStatusReply {
 message DealRequest {
     string bidId = 1;
     string askId = 2;
-    Order order = 3;
     string specHash = 4;
+}
+
+message ApproveDealRequest {
+    BigInt dealID = 1;
+    string bidID = 2;
+    string askID = 3;
 }
 
 message GetDevicePropertiesReply {
@@ -183,11 +195,24 @@ message DevicesReply {
 
 message InsertSlotRequest {
     Slot slot = 1;
-    string price = 2;
+    BigInt pricePerSecond = 4;
+
+    string buyerID = 3;
 }
 
 message PullTaskRequest {
     string dealId = 1;
-    string name = 2;
-    string taskId = 3;
+    string taskId = 2;
 }
+
+message DealInfoReply {
+    // ID is deal ID.
+    ID id = 1;
+    // Order is BID order associated with a deal.
+    Order order = 2;
+    // List of currently running tasks.
+    StatusMapReply running = 3;
+    // List of completed tasks.
+    StatusMapReply completed = 4;
+}
+

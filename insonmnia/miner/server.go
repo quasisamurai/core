@@ -9,28 +9,28 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ccding/go-stun/stun"
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/go-connections/nat"
+	"github.com/gliderlabs/ssh"
+	log "github.com/noxiouz/zapctx/ctxlog"
+	"github.com/pborman/uuid"
+	"github.com/pkg/errors"
+	"github.com/sonm-io/core/insonmnia/auth"
+	"github.com/sonm-io/core/insonmnia/hardware"
+	"github.com/sonm-io/core/insonmnia/resource"
+	"github.com/sonm-io/core/insonmnia/structs"
+	pb "github.com/sonm-io/core/proto"
+	"github.com/sonm-io/core/util"
+	"github.com/sonm-io/core/util/xgrpc"
 	"go.uber.org/zap"
-	"google.golang.org/grpc/metadata"
-
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-
-	log "github.com/noxiouz/zapctx/ctxlog"
-
-	pb "github.com/sonm-io/core/proto"
-	"github.com/sonm-io/core/util"
-
-	"github.com/ccding/go-stun/stun"
-	"github.com/docker/docker/api/types"
-
-	"github.com/docker/docker/api/types/container"
-	"github.com/gliderlabs/ssh"
-	"github.com/sonm-io/core/insonmnia/hardware"
-	"github.com/sonm-io/core/insonmnia/resource"
-	"github.com/sonm-io/core/insonmnia/structs"
 )
 
 // Miner holds information about jobs, make orders to Observer and communicates with Hub
@@ -81,6 +81,137 @@ type Miner struct {
 	creds credentials.TransportCredentials
 	// Certificate rotator
 	certRotator util.HitlessCertRotator
+}
+
+func NewMiner(cfg Config, opts ...Option) (m *Miner, err error) {
+	o := &options{}
+	for _, opt := range opts {
+		opt(o)
+	}
+
+	if cfg == nil {
+		return nil, errors.New("config is mandatory for MinerBuilder")
+	}
+
+	if o.key == nil {
+		return nil, errors.New("private key is mandatory")
+	}
+
+	if o.ctx == nil {
+		o.ctx = context.Background()
+	}
+
+	if len(o.uuid) == 0 {
+		o.uuid = uuid.New()
+	}
+
+	ctx, cancel := context.WithCancel(o.ctx)
+	if o.ovs == nil {
+		o.ovs, err = NewOverseer(ctx, cfg.GPU())
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+	}
+
+	if o.hardware == nil {
+		o.hardware = hardware.New()
+	}
+
+	hardwareInfo, err := o.hardware.Info()
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	log.G(ctx).Info("collected hardware info", zap.Any("hw", hardwareInfo))
+
+	cgroup, cGroupManager, err := makeCgroupManager(cfg.HubResources())
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	if o.locatorClient == nil {
+		_, TLSConf, err := util.NewHitlessCertRotator(o.ctx, o.key)
+		if err != nil {
+			cancel()
+			return nil, errors.Wrap(err, "failed to create locator client")
+		}
+
+		locatorCC, err := xgrpc.NewWalletAuthenticatedClient(o.ctx, util.NewTLS(TLSConf), cfg.LocatorEndpoint())
+		if err != nil {
+			cancel()
+			return nil, errors.Wrap(err, "failed to create locator client")
+		}
+
+		o.locatorClient = pb.NewLocatorClient(locatorCC)
+	}
+
+	// The rotator will be stopped by ctx
+	certRotator, TLSConf, err := util.NewHitlessCertRotator(ctx, o.key)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	hubEndpoint, err := o.getHubConnectionInfo(cfg)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	creds := auth.NewWalletAuthenticator(util.NewTLS(TLSConf), hubEndpoint.EthAddress)
+	grpcServer := xgrpc.NewServer(log.GetLogger(ctx),
+		xgrpc.Credentials(creds),
+		xgrpc.DefaultTraceInterceptor(),
+	)
+
+	if !platformSupportCGroups && cfg.HubResources() != nil {
+		log.G(ctx).Warn("your platform does not support CGroup, but the config has resources section")
+	}
+
+	if err := o.setupNetworkOptions(cfg); err != nil {
+		cancel()
+		return nil, errors.Wrap(err, "failed to set up network options")
+	}
+
+	log.G(o.ctx).Info("discovered public IPs",
+		zap.Any("public IPs", o.publicIPs),
+		zap.Any("nat", o.nat))
+
+	m = &Miner{
+		ctx:        ctx,
+		cancel:     cancel,
+		grpcServer: grpcServer,
+		ovs:        o.ovs,
+
+		name:      o.uuid,
+		hardware:  hardwareInfo,
+		resources: resource.NewPool(hardwareInfo),
+
+		publicIPs:  o.publicIPs,
+		natType:    o.nat,
+		hubAddress: hubEndpoint.Endpoint,
+
+		rl:             newReverseListener(1),
+		containers:     make(map[string]*ContainerInfo),
+		statusChannels: make(map[int]chan bool),
+		nameMapping:    make(map[string]string),
+
+		controlGroup:  cgroup,
+		cGroupManager: cGroupManager,
+		ssh:           o.ssh,
+
+		connectedHubs: make(map[string]struct{}),
+
+		certRotator: certRotator,
+		creds:       creds,
+	}
+
+	pb.RegisterMinerServer(grpcServer, m)
+
+	return m, nil
 }
 
 type resourceHandle interface {
@@ -204,14 +335,14 @@ func (m *Miner) Handshake(ctx context.Context, request *pb.MinerHandshakeRequest
 	resp := &pb.MinerHandshakeReply{
 		Miner:        m.name,
 		Capabilities: m.hardware.IntoProto(),
-		NatType:      marshalNATType(m.natType),
+		NatType:      pb.NewNATType(m.natType),
 	}
 
 	return resp, nil
 }
 
 func (m *Miner) scheduleStatusPurge(id string) {
-	t := time.NewTimer(time.Second * 30)
+	t := time.NewTimer(time.Second * 3600)
 	defer t.Stop()
 	select {
 	case <-t.C:
@@ -366,39 +497,50 @@ func (m *Miner) Start(ctx context.Context, request *pb.MinerStartRequest) (*pb.M
 	containerInfo.StartAt = time.Now()
 	containerInfo.ImageName = d.Image
 
-	m.saveContainerInfo(request.Id, containerInfo)
-
-	go m.listenForStatus(statusListener, request.Id)
-
 	var rpl = pb.MinerStartReply{
 		Container: containerInfo.ID,
 		Routes:    []*pb.Route{},
 	}
-	for port, v := range containerInfo.Ports {
-		if len(v) > 0 {
-			hostPort, err := strconv.ParseUint(v[0].HostPort, 10, 16)
-			if err != nil {
-				log.G(m.ctx).Warn("failed to convert real port to uint16",
-					zap.Error(err),
-					zap.String("port", v[0].HostPort),
-				)
-				continue
-			}
 
-			for _, publicIP := range m.publicIPs {
-				replyRoute := &pb.Route{
-					Port: string(port),
-					Endpoint: &pb.SocketAddr{
-						Addr: publicIP,
-						Port: uint32(hostPort),
-					},
-				}
-				rpl.Routes = append(rpl.Routes, replyRoute)
-			}
+	for port, initialPortBindings := range containerInfo.Ports {
+		if len(initialPortBindings) < 1 {
+			continue
 		}
+
+		internalPortStr := initialPortBindings[0].HostPort
+		internalPortUint, err := strconv.ParseUint(internalPortStr, 10, 16)
+		if err != nil {
+			log.G(m.ctx).Warn("failed to convert real port to uint16",
+				zap.Error(err),
+				zap.String("port", internalPortStr),
+			)
+
+			continue
+		}
+
+		var fixedPortBindings []nat.PortBinding
+		for _, publicIP := range m.publicIPs {
+			fixedPortBindings = append(fixedPortBindings, nat.PortBinding{
+				HostIP: publicIP, HostPort: internalPortStr})
+
+			rpl.Routes = append(rpl.Routes, &pb.Route{
+				Port: string(port),
+				Endpoint: &pb.SocketAddr{
+					Addr: publicIP,
+					Port: uint32(internalPortUint),
+				},
+			})
+		}
+
+		containerInfo.Ports[port] = fixedPortBindings
 	}
 
+	m.saveContainerInfo(request.Id, containerInfo)
+
+	go m.listenForStatus(statusListener, request.Id)
+
 	resourceHandle.commit()
+
 	return &rpl, nil
 }
 
@@ -442,10 +584,13 @@ func (m *Miner) Stop(ctx context.Context, request *pb.ID) (*pb.Empty, error) {
 	if err := m.ovs.Stop(ctx, containerInfo.ID); err != nil {
 		log.G(ctx).Error("failed to Stop container", zap.Error(err))
 		m.setStatus(&pb.TaskStatusReply{Status: pb.TaskStatusReply_BROKEN}, request.Id)
+
 		return nil, status.Errorf(codes.Internal, "failed to stop container %v", err)
 	}
+
 	m.setStatus(&pb.TaskStatusReply{Status: pb.TaskStatusReply_FINISHED}, request.Id)
 	m.resources.Release(&containerInfo.Resources)
+
 	return &pb.Empty{}, nil
 }
 
@@ -460,10 +605,13 @@ func (m *Miner) sendTasksStatus(server pb.Miner_TasksStatusServer) error {
 	result := &pb.StatusMapReply{Statuses: make(map[string]*pb.TaskStatusReply)}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
 	for id, info := range m.containers {
 		result.Statuses[id] = info.status
 	}
+
 	log.G(m.ctx).Info("sending result", zap.Any("info", m.containers), zap.Any("statuses", result.Statuses))
+
 	return server.Send(result)
 }
 
@@ -563,14 +711,18 @@ func (m *Miner) TaskDetails(ctx context.Context, req *pb.ID) (*pb.TaskStatusRepl
 		return nil, status.Errorf(codes.NotFound, "no task with id %s", req.GetId())
 	}
 
-	metrics, err := m.ovs.Info(ctx)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "cannot get container metrics: %s", err.Error())
-	}
+	var metric ContainerMetrics
+	// If a container has been stoped, ovs.Info has no metrics for such container
+	if info.status.Status == pb.TaskStatusReply_RUNNING {
+		metrics, err := m.ovs.Info(ctx)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "cannot get container metrics: %s", err.Error())
+		}
 
-	metric, ok := metrics[info.ID]
-	if !ok {
-		return nil, status.Errorf(codes.NotFound, "Cannot get metrics for container %s", req.GetId())
+		metric, ok = metrics[info.ID]
+		if !ok {
+			return nil, status.Errorf(codes.NotFound, "Cannot get metrics for container %s", req.GetId())
+		}
 	}
 
 	portsStr, _ := json.Marshal(info.Ports)
@@ -578,7 +730,7 @@ func (m *Miner) TaskDetails(ctx context.Context, req *pb.ID) (*pb.TaskStatusRepl
 		Status:    info.status.Status,
 		ImageName: info.ImageName,
 		Ports:     string(portsStr),
-		Uptime:    uint64(time.Now().UnixNano() - info.StartAt.UnixNano()),
+		Uptime:    uint64(time.Now().Sub(info.StartAt).Nanoseconds()),
 		Usage:     metric.Marshal(),
 		AvailableResources: &pb.AvailableResources{
 			NumCPUs:      int64(info.Resources.NumCPUs),
@@ -626,7 +778,7 @@ func (m *Miner) connectToHub(address string) {
 		return
 	}
 
-	// NOTE: it's not the best soluction
+	// NOTE: it's not the best solution.
 	// It's needed to detect connection failure.
 	// Refactor: to detect reconnection from Accept
 	// Look at LimitListener
@@ -700,14 +852,19 @@ func (m *Miner) Serve() error {
 // Close disposes all resources related to the Miner
 func (m *Miner) Close() {
 	log.G(m.ctx).Info("closing miner")
+
 	m.cancel()
 	m.grpcServer.Stop()
+
 	if m.ssh != nil {
 		m.ssh.Close()
 	}
+
 	if m.certRotator != nil {
 		m.certRotator.Close()
 	}
+
+	m.ovs.Close()
 	m.rl.Close()
 	m.controlGroup.Delete()
 }

@@ -145,3 +145,27 @@ locator:
 	assert.NoError(t, err)
 	assert.Equal(t, conf.Locator.Period, 500)
 }
+
+func TestGetEndpoints(t *testing.T) {
+	assert := assert.New(t)
+	var fixtures = []struct {
+		WorkerEndpoint  string
+		ClusterEndpoint string
+		ExpectError     bool
+	}{
+		{WorkerEndpoint: ":10002", ClusterEndpoint: ":10001", ExpectError: false},
+		{WorkerEndpoint: ":10002", ClusterEndpoint: "0.0.0.0:10001", ExpectError: false},
+		{WorkerEndpoint: ":10002", ClusterEndpoint: "aaaa:50000", ExpectError: true},
+	}
+
+	for _, fixture := range fixtures {
+		clientEndpoints, _, err := getEndpoints(
+			&ClusterConfig{Endpoint: fixture.ClusterEndpoint}, fixture.WorkerEndpoint)
+		if fixture.ExpectError {
+			assert.NotNil(err)
+		} else {
+			assert.NoError(err)
+			assert.NotEmpty(clientEndpoints)
+		}
+	}
+}

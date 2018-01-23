@@ -4,22 +4,27 @@ import (
 	"crypto/ecdsa"
 	"math/big"
 	"testing"
-
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/golang/mock/gomock"
 	"github.com/sonm-io/core/blockchain"
-	"github.com/sonm-io/core/insonmnia/structs"
 	pb "github.com/sonm-io/core/proto"
 	"github.com/sonm-io/core/util"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/net/context"
 )
 
+const (
+	clientAddrString = "0x0001"
+)
+
+var clientAddr = common.HexToAddress(clientAddrString)
+
 func makeTestKey() (string, *ecdsa.PrivateKey) {
 	key, _ := ethcrypto.GenerateKey()
-	addr := util.PubKeyToAddr(key.PublicKey)
+	addr := util.PubKeyToAddr(key.PublicKey).Hex()
 	return addr, key
 }
 
@@ -37,26 +42,26 @@ func TestEth_CheckDealExists(t *testing.T) {
 		bc:  bC,
 	}
 
-	exists, err := eeth.CheckDealExists("1")
+	exists, err := eeth.GetDeal("1")
 	assert.NoError(t, err)
-	assert.True(t, exists)
+	assert.NotNil(t, exists)
 
-	exists, err = eeth.CheckDealExists("2")
-	assert.NoError(t, err)
-	assert.False(t, exists)
+	exists, err = eeth.GetDeal("2")
+	assert.Error(t, err)
+	assert.Nil(t, exists)
 
-	exists, err = eeth.CheckDealExists("3")
-	assert.NoError(t, err)
-	assert.False(t, exists)
+	exists, err = eeth.GetDeal("3")
+	assert.Error(t, err)
+	assert.Nil(t, exists)
 
-	exists, err = eeth.CheckDealExists("qwerty")
+	exists, err = eeth.GetDeal("qwerty")
 	assert.Error(t, err)
 }
 
 func TestEth_WaitForDealCreated(t *testing.T) {
 	addr, key := makeTestKey()
 	bC := blockchain.NewMockBlockchainer(gomock.NewController(t))
-	bC.EXPECT().GetOpenedDeal(addr, "client-addr").AnyTimes().Return(
+	bC.EXPECT().GetOpenedDeal(addr, clientAddrString).AnyTimes().Return(
 		[]*big.Int{
 			big.NewInt(100),
 			big.NewInt(200),
@@ -65,20 +70,21 @@ func TestEth_WaitForDealCreated(t *testing.T) {
 
 	bC.EXPECT().GetDealInfo(big.NewInt(100)).AnyTimes().Return(
 		&pb.Deal{
+			Id:                "100",
 			SupplierID:        addr,
-			BuyerID:           "client-addr",
+			BuyerID:           clientAddrString,
 			Status:            pb.DealStatus_ACCEPTED,
 			SpecificationHash: "aaa",
 		},
 		nil)
 	bC.EXPECT().GetDealInfo(big.NewInt(200)).AnyTimes().Return(
 		&pb.Deal{
+			Id:                "200",
 			SupplierID:        addr,
-			BuyerID:           "client-addr",
+			BuyerID:           clientAddrString,
 			Status:            pb.DealStatus_PENDING,
 			SpecificationHash: "bbb",
-		},
-		nil)
+		}, nil)
 
 	eeth := &eth{
 		ctx:     context.Background(),
@@ -87,26 +93,18 @@ func TestEth_WaitForDealCreated(t *testing.T) {
 		timeout: time.Second,
 	}
 
-	req, err := structs.NewDealRequest(&pb.DealRequest{
-		AskId:    addr,
-		BidId:    "client-addr",
-		SpecHash: "bbb",
-		Order:    &pb.Order{Slot: &pb.Slot{}, ByuerID: "client-addr"},
-	})
-	assert.NoError(t, err)
-
-	found, err := eeth.WaitForDealCreated(req)
+	found, err := eeth.WaitForDealCreated(DealID("200"), clientAddr)
 
 	assert.NoError(t, err)
 	assert.Equal(t, "bbb", found.SpecificationHash)
-	assert.Equal(t, "client-addr", found.BuyerID)
+	assert.Equal(t, clientAddrString, found.BuyerID)
 	assert.Equal(t, addr, found.SupplierID)
 }
 
 func TestEth_CheckDealExists2(t *testing.T) {
 	addr, key := makeTestKey()
 	bC := blockchain.NewMockBlockchainer(gomock.NewController(t))
-	bC.EXPECT().GetOpenedDeal(addr, "client-addr").AnyTimes().Return(
+	bC.EXPECT().GetOpenedDeal(addr, clientAddrString).AnyTimes().Return(
 		[]*big.Int{
 			big.NewInt(100),
 		},
@@ -114,8 +112,9 @@ func TestEth_CheckDealExists2(t *testing.T) {
 
 	bC.EXPECT().GetDealInfo(big.NewInt(100)).AnyTimes().Return(
 		&pb.Deal{
+			Id:                "100",
 			SupplierID:        addr,
-			BuyerID:           "client-addr",
+			BuyerID:           "not-a-client",
 			Status:            pb.DealStatus_PENDING,
 			SpecificationHash: "bbb",
 		},
@@ -128,15 +127,7 @@ func TestEth_CheckDealExists2(t *testing.T) {
 		timeout: time.Second,
 	}
 
-	req, err := structs.NewDealRequest(&pb.DealRequest{
-		AskId:    addr,
-		BidId:    "client-addr",
-		SpecHash: "aaa",
-		Order:    &pb.Order{Slot: &pb.Slot{}, ByuerID: "client-addr"},
-	})
-	assert.NoError(t, err)
-
-	found, err := eeth.WaitForDealCreated(req)
+	found, err := eeth.WaitForDealCreated("100", clientAddr)
 	assert.Nil(t, found)
 	assert.Error(t, err)
 	assert.EqualError(t, err, "context deadline exceeded")

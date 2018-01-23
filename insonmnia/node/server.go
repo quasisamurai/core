@@ -2,41 +2,45 @@ package node
 
 import (
 	"crypto/ecdsa"
+	"io"
 	"net"
 	"time"
 
 	log "github.com/noxiouz/zapctx/ctxlog"
 	"github.com/sonm-io/core/blockchain"
+	"github.com/sonm-io/core/insonmnia/auth"
 	pb "github.com/sonm-io/core/proto"
 	"github.com/sonm-io/core/util"
+	"github.com/sonm-io/core/util/xgrpc"
 	"go.uber.org/zap"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
 
-type hubClientCreator func(addr string) (pb.HubClient, error)
+type hubClientCreator func(addr string) (pb.HubClient, io.Closer, error)
 
 // remoteOptions describe options related to remove gRPC services
 type remoteOptions struct {
-	ctx            context.Context
-	key            *ecdsa.PrivateKey
-	conf           Config
-	creds          credentials.TransportCredentials
-	approveTimeout time.Duration
-	locator        pb.LocatorClient
-	market         pb.MarketClient
-	eth            blockchain.Blockchainer
-	hubCreator     hubClientCreator
+	ctx                context.Context
+	key                *ecdsa.PrivateKey
+	conf               Config
+	creds              credentials.TransportCredentials
+	locator            pb.LocatorClient
+	market             pb.MarketClient
+	eth                blockchain.Blockchainer
+	hubCreator         hubClientCreator
+	dealApproveTimeout time.Duration
+	dealCreateTimeout  time.Duration
 }
 
 func newRemoteOptions(ctx context.Context, key *ecdsa.PrivateKey, conf Config, creds credentials.TransportCredentials) (*remoteOptions, error) {
-	locatorCC, err := util.MakeGrpcClient(ctx, conf.LocatorEndpoint(), creds)
+	locatorCC, err := xgrpc.NewWalletAuthenticatedClient(ctx, creds, conf.LocatorEndpoint())
 	if err != nil {
 		return nil, err
 	}
 
-	marketCC, err := util.MakeGrpcClient(ctx, conf.MarketEndpoint(), nil)
+	marketCC, err := xgrpc.NewWalletAuthenticatedClient(ctx, creds, conf.MarketEndpoint())
 	if err != nil {
 		return nil, err
 	}
@@ -46,35 +50,38 @@ func newRemoteOptions(ctx context.Context, key *ecdsa.PrivateKey, conf Config, c
 		return nil, err
 	}
 
-	hc := func(addr string) (pb.HubClient, error) {
-		cc, err := util.MakeGrpcClient(ctx, addr, creds)
+	hc := func(addr string) (pb.HubClient, io.Closer, error) {
+		cc, err := xgrpc.NewClient(ctx, addr, creds)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
-		return pb.NewHubClient(cc), nil
+		return pb.NewHubClient(cc), cc, nil
 	}
 
 	return &remoteOptions{
-		key:            key,
-		conf:           conf,
-		ctx:            ctx,
-		creds:          creds,
-		locator:        pb.NewLocatorClient(locatorCC),
-		market:         pb.NewMarketClient(marketCC),
-		eth:            bcAPI,
-		approveTimeout: 900 * time.Second,
-		hubCreator:     hc,
+		key:                key,
+		conf:               conf,
+		ctx:                ctx,
+		creds:              creds,
+		locator:            pb.NewLocatorClient(locatorCC),
+		market:             pb.NewMarketClient(marketCC),
+		eth:                bcAPI,
+		dealApproveTimeout: 900 * time.Second,
+		dealCreateTimeout:  180 * time.Second,
+		hubCreator:         hc,
 	}, nil
 }
 
 // Node is LocalNode instance
 type Node struct {
-	ctx     context.Context
-	conf    Config
 	lis     net.Listener
 	srv     *grpc.Server
+	ctx     context.Context
 	privKey *ecdsa.PrivateKey
+	// processorRestarter must start together with node .Serve (not .New).
+	// This func must fetch orders from the Market and restart it background processing.
+	processorRestarter func() error
 }
 
 // New creates new Local Node instance
@@ -91,55 +98,80 @@ func New(ctx context.Context, c Config, key *ecdsa.PrivateKey) (*Node, error) {
 		return nil, err
 	}
 
-	creds := util.NewTLS(TLSConfig)
-	srv := util.MakeGrpcServer(creds)
-
-	opts, err := newRemoteOptions(ctx, key, c, creds)
+	remoteCreds := util.NewTLS(TLSConfig)
+	opts, err := newRemoteOptions(ctx, key, c, remoteCreds)
 	if err != nil {
 		return nil, err
 	}
 
-	// register hub connection if hub addr is set
-	if c.HubEndpoint() != "" {
-		hub, err := newHubAPI(opts)
-		if err != nil {
-			return nil, err
-		}
-		pb.RegisterHubManagementServer(srv, hub)
-		log.G(ctx).Info("hub service registered", zap.String("endpt", c.HubEndpoint()))
-	}
+	hub := newHubAPI(opts)
 
 	market, err := newMarketAPI(opts)
 	if err != nil {
 		return nil, err
 	}
-	pb.RegisterMarketServer(srv, market)
-	log.G(ctx).Info("market service registered", zap.String("endpt", c.MarketEndpoint()))
 
 	deals, err := newDealsAPI(opts)
 	if err != nil {
 		return nil, err
 	}
-	pb.RegisterDealManagementServer(srv, deals)
-	log.G(ctx).Info("deals service registered")
 
 	tasks, err := newTasksAPI(opts)
 	if err != nil {
 		return nil, err
 	}
+
+	addr := util.PubKeyToAddr(key.PublicKey)
+	creds := auth.NewWalletAuthenticator(util.NewTLS(TLSConfig), addr)
+	logger := log.GetLogger(ctx)
+	srv := xgrpc.NewServer(logger,
+		xgrpc.Credentials(creds),
+		xgrpc.DefaultTraceInterceptor(),
+		xgrpc.UnaryServerInterceptor(hub.(*hubAPI).intercept),
+	)
+
+	pb.RegisterHubManagementServer(srv, hub)
+	log.G(ctx).Info("hub service registered", zap.String("endpt", c.HubEndpoint()))
+
+	pb.RegisterMarketServer(srv, market)
+	log.G(ctx).Info("market service registered", zap.String("endpt", c.MarketEndpoint()))
+
+	pb.RegisterDealManagementServer(srv, deals)
+	log.G(ctx).Info("deals service registered")
+
 	pb.RegisterTaskManagementServer(srv, tasks)
 	log.G(ctx).Info("tasks service registered")
 
 	return &Node{
-		lis:     lis,
-		conf:    c,
-		ctx:     ctx,
-		srv:     srv,
-		privKey: key,
+		lis:                lis,
+		ctx:                ctx,
+		srv:                srv,
+		processorRestarter: market.(*marketAPI).restartOrdersProcessing(),
 	}, nil
+}
+
+type serverStreamMDForwarder struct {
+	grpc.ServerStream
+}
+
+func (s *serverStreamMDForwarder) Context() context.Context {
+	return util.ForwardMetadata(s.ServerStream.Context())
+}
+
+func (n *Node) InterceptStreamRequest(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	return handler(srv, &serverStreamMDForwarder{ss})
 }
 
 // Serve binds gRPC services and start it
 func (n *Node) Serve() error {
+	// restart background processing
+	if n.processorRestarter != nil {
+		err := n.processorRestarter()
+		if err != nil {
+			// should it breaks startup?
+			log.G(n.ctx).Error("cannot restart order processing", zap.Error(err))
+		}
+	}
+
 	return n.srv.Serve(n.lis)
 }

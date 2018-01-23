@@ -1,5 +1,5 @@
 #!/usr/bin/env make
-VER = v0.2.1.1
+VER = v0.3
 BUILD = $(shell git rev-parse --short HEAD)
 FULL_VER = $(VER)-$(BUILD)
 
@@ -14,18 +14,17 @@ endif
 
 INSTALLDIR=${GOPATH}/bin/
 
-MINER=sonmminer
+MINER=sonmworker
 HUB=sonmhub
 CLI=sonmcli
 LOCATOR=sonmlocator
-MARKET=sonmmarketplace
 LOCAL_NODE=sonmnode
 
 TAGS=nocgo
 
 GPU_SUPPORT?=false
 ifeq ($(GPU_SUPPORT),true)
-    TAGS+=cl
+    GPU_TAGS=cl
 endif
 
 UNAME_S := $(shell uname -s)
@@ -47,15 +46,11 @@ build/locator:
 
 build/miner:
 	@echo "+ $@"
-	${GO} build -tags "$(TAGS)" -ldflags "-s -X main.version=$(FULL_VER)" -o ${MINER} ${GOCMD}/miner
+	${GO} build -tags "$(TAGS) $(GPU_TAGS)" -ldflags "-s -X main.version=$(FULL_VER)" -o ${MINER} ${GOCMD}/miner
 
 build/hub:
 	@echo "+ $@"
 	${GO} build -tags "$(TAGS)" -ldflags "-s -X main.version=$(FULL_VER)" -o ${HUB} ${GOCMD}/hub
-
-build/marketplace:
-	@echo "+ $@"
-	${GO} build -tags "$(TAGS)" -ldflags "-s -X main.version=$(FULL_VER)" -o ${MARKET} ${GOCMD}/marketplace
 
 build/cli:
 	@echo "+ $@"
@@ -76,14 +71,14 @@ build/node_win32:
 
 build/insomnia: build/hub build/miner build/cli build/node
 
-build/aux: build/locator build/marketplace
+build/aux: build/locator
 
 build: build/insomnia build/aux
 
 install: all
 	@echo "+ $@"
 	mkdir -p ${INSTALLDIR}
-	cp ${MINER} ${HUB} ${CLI} ${LOCATOR} ${MARKET} ${LOCAL_NODE} ${INSTALLDIR}
+	cp ${MINER} ${HUB} ${CLI} ${LOCATOR} ${LOCAL_NODE} ${INSTALLDIR}
 
 vet:
 	@echo "+ $@"
@@ -129,7 +124,10 @@ mock:
 		"github.com/sonm-io/core/proto" HubClient && ${SED}
 
 clean:
-	rm -f ${MINER} ${HUB} ${CLI} ${MARKET}
+	rm -f ${MINER} ${HUB} ${CLI}
 
 deb:
 	debuild --no-lintian --preserve-env -uc -us -i -I
+
+coverage:
+	.ci/coverage.sh

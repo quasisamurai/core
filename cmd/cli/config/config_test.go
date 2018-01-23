@@ -3,84 +3,85 @@ package config
 import (
 	"io/ioutil"
 	"os"
-	"os/user"
 	"path"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-const (
-	configDir  = ".sonm"
-	configName = "cli.yaml"
-)
-
-func getHomeDir() string {
-	u, _ := user.Current()
-	return u.HomeDir
+func testConfigDir() string {
+	d, _ := ioutil.TempDir("", "sonm_test")
+	return d
 }
 
-func createTestConfigFile(body string) error {
-	dir := path.Join(getHomeDir(), configDir)
+func createTestConfigFile(body string) (string, error) {
+	dir := testConfigDir()
 	os.Mkdir(dir, 0700)
 	cfg := path.Join(dir, configName)
-	return ioutil.WriteFile(cfg, []byte(body), 0600)
+	return dir, ioutil.WriteFile(cfg, []byte(body), 0600)
 }
 
-func deleteTestConfigFile() {
-	cfg := path.Join(getHomeDir(), configDir, configName)
+func deleteTestConfigFile(dir string) {
+	cfg := path.Join(dir, configName)
 	os.Remove(cfg)
 }
 
 func TestConfigLoad(t *testing.T) {
-	err := createTestConfigFile(`
-hub_address: 127.0.0.1:10005
+	dir, err := createTestConfigFile(`
 output_format: json
-key_store: "/home/user/.sonm/keys/"
-pass_phrase: "qwerty123"`)
-	defer deleteTestConfigFile()
+ethereum:
+  key_store: "/home/user/.sonm/keys/"
+  pass_phrase: "qwerty123"`)
+	defer deleteTestConfigFile(dir)
 	assert.NoError(t, err)
 
-	cfg, err := NewConfig()
+	cfg, err := NewConfig(dir)
 	assert.NoError(t, err)
 	assert.Equal(t, "json", cfg.OutputFormat())
-	assert.Equal(t, "127.0.0.1:10005", cfg.HubAddress())
 	assert.Equal(t, "/home/user/.sonm/keys/", cfg.KeyStore())
 	assert.Equal(t, "qwerty123", cfg.PassPhrase())
 }
 
 func TestConfigDefaults(t *testing.T) {
-	err := createTestConfigFile("")
-	defer deleteTestConfigFile()
+	dir, err := createTestConfigFile("")
+	defer deleteTestConfigFile(dir)
 	assert.NoError(t, err)
 
-	cfg, err := NewConfig()
+	cfg, err := NewConfig(dir)
 	assert.NoError(t, err)
 	assert.Equal(t, "", cfg.OutputFormat())
-	assert.Equal(t, "", cfg.HubAddress())
 }
 
 func TestConfigNoFile(t *testing.T) {
-	deleteTestConfigFile()
-
 	// no config == all defalts
-	cfg, err := NewConfig()
+	cfg, err := NewConfig(testConfigDir())
 	assert.NoError(t, err)
 	assert.Equal(t, "simple", cfg.OutputFormat())
-	assert.Equal(t, "", cfg.HubAddress())
 }
 
 func TestConfigCannotRead(t *testing.T) {
-	defer deleteTestConfigFile()
-	dir := path.Join(getHomeDir(), configDir)
+	dir := testConfigDir()
+
 	os.Mkdir(dir, 0700)
 	cfgPath := path.Join(dir, configName)
-	// remove read permissions
+
+	defer deleteTestConfigFile(cfgPath)
+
+	// drop read permissions
 	err := ioutil.WriteFile(cfgPath, []byte{}, 0200)
 	assert.NoError(t, err)
 
-	cfg, err := NewConfig()
+	cfg, err := NewConfig(dir)
 	assert.Nil(t, cfg)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "permission denied")
+}
+
+func TestGetConfigPath(t *testing.T) {
+	cfg := &cliConfig{}
+	p, err := cfg.getConfigPath("/tmp")
+
+	require.NoError(t, err)
+	assert.Equal(t, "/tmp/cli.yaml", p)
 }

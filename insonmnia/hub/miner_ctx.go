@@ -8,6 +8,8 @@ import (
 	"time"
 
 	log "github.com/noxiouz/zapctx/ctxlog"
+	"github.com/sonm-io/core/insonmnia/auth"
+	"github.com/sonm-io/core/util/xgrpc"
 	"go.uber.org/zap"
 
 	"golang.org/x/net/context"
@@ -27,7 +29,11 @@ var (
 	errForbiddenMiner    = errors.New("miner is forbidden")
 )
 
-type OrderId string
+type OrderID string
+
+func (id OrderID) String() string {
+	return string(id)
+}
 
 // MinerCtx holds all the data related to a connected Miner
 type MinerCtx struct {
@@ -48,14 +54,14 @@ type MinerCtx struct {
 
 	// Traffic routing.
 
-	router router
+	router Router
 
 	// Scheduling.
 
 	mu           sync.Mutex
 	capabilities *hardware.Hardware
 	usage        *resource.Pool
-	usageMapping map[OrderId]*resource.Resources
+	usageMapping map[OrderID]*resource.Resources
 }
 
 func (h *Hub) createMinerCtx(ctx context.Context, conn net.Conn) (*MinerCtx, error) {
@@ -72,11 +78,11 @@ func (h *Hub) createMinerCtx(ctx context.Context, conn net.Conn) (*MinerCtx, err
 		m = MinerCtx{
 			conn:         conn,
 			statusMap:    make(map[string]*pb.TaskStatusReply),
-			usageMapping: make(map[OrderId]*resource.Resources),
+			usageMapping: make(map[OrderID]*resource.Resources),
 		}
 	)
 	m.ctx, m.cancel = context.WithCancel(ctx)
-	m.grpcConn, err = util.MakeGrpcClient(ctx, "miner", nil, grpc.WithDialer(func(_ string, _ time.Duration) (net.Conn, error) {
+	m.grpcConn, err = xgrpc.NewClient(ctx, "miner", nil, grpc.WithDialer(func(_ string, _ time.Duration) (net.Conn, error) {
 		return conn, nil
 	}))
 	if err != nil {
@@ -103,7 +109,7 @@ func (h *Hub) tlsHandshake(ctx context.Context, conn net.Conn) (net.Conn, error)
 	}
 
 	switch authInfo := authInfo.(type) {
-	case util.EthAuthInfo:
+	case auth.EthAuthInfo:
 		if !h.acl.Has(authInfo.Wallet.Hex()) {
 			return nil, errForbiddenMiner
 		}
@@ -160,20 +166,20 @@ func (m *MinerCtx) handshake(h *Hub) error {
 }
 
 // NewRouter constructs a new router that will route requests to bypass miner's firewall.
-func (h *Hub) newRouter(id string, natType pb.NATType) (router, error) {
+func (h *Hub) newRouter(id string, natType pb.NATType) (Router, error) {
 	if h.gateway == nil || natType == pb.NATType_NONE {
 		return newDirectRouter(), nil
 	}
 
 	if gateway.PlatformSupportIPVS {
-		return newIPVSRouter(h.ctx, id, h.gateway, h.portPool), nil
+		return newIPVSRouter(h.ctx, h.gateway, h.portPool), nil
 	}
 
 	return nil, errors.New("miner has firewall configured, but Hub's host OS has no IPVS support")
 }
 
 func (m *MinerCtx) deregisterRoute(ID string) error {
-	return m.router.DeregisterRoute(ID)
+	return m.router.Deregister(ID)
 }
 
 func (m *MinerCtx) initStatusClient() (statusClient pb.Miner_TasksStatusClient, err error) {
@@ -233,33 +239,54 @@ func (m *MinerCtx) ping() error {
 }
 
 // Consume consumes the specified resources from the miner.
-func (m *MinerCtx) Consume(Id OrderId, usage *resource.Resources) error {
+func (m *MinerCtx) Consume(Id OrderID, usage *resource.Resources) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	return m.consume(Id, usage)
 }
 
-func (m *MinerCtx) consume(id OrderId, usage *resource.Resources) error {
+func (m *MinerCtx) consume(id OrderID, usage *resource.Resources) error {
+	if m.orderExists(id) {
+		return fmt.Errorf("order already exists")
+	}
 	if err := m.usage.Consume(usage); err != nil {
 		return err
 	}
 
 	log.G(m.ctx).Debug("consumed resources for a task",
-		zap.String("id", string(id)),
+		zap.Stringer("id", id),
 		zap.Any("usage", usage),
 		zap.Any("usageTotal", m.usage.GetUsage()),
 		zap.Any("capabilities", m.capabilities),
 	)
 
-	m.usageMapping[OrderId(id)] = usage
+	m.usageMapping[OrderID(id)] = usage
 
 	return nil
+}
+
+func (m *MinerCtx) OrderExists(id OrderID) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.orderExists(id)
+}
+
+func (m *MinerCtx) orderExists(id OrderID) bool {
+	_, exists := m.usageMapping[id]
+	return exists
 }
 
 func (m *MinerCtx) PollConsume(usage *resource.Resources) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	log.G(m.ctx).Debug("checking for resources",
+		zap.Any("usage", usage),
+		zap.Any("usageTotal", m.usage.GetUsage()),
+		zap.Any("capabilities", m.capabilities),
+	)
 
 	return m.usage.PollConsume(usage)
 }
@@ -267,21 +294,21 @@ func (m *MinerCtx) PollConsume(usage *resource.Resources) error {
 // Release returns back resources for the miner.
 //
 // Should be called when a deal has finished no matter for what reason.
-func (m *MinerCtx) Release(id OrderId) {
+func (m *MinerCtx) Release(id OrderID) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	m.releaseDeal(id)
 }
 
-func (m *MinerCtx) releaseDeal(id OrderId) {
+func (m *MinerCtx) releaseDeal(id OrderID) {
 	usage, exists := m.usageMapping[id]
 	if !exists {
 		return
 	}
 
 	log.G(m.ctx).Debug("retained resources for a task",
-		zap.String("id", string(id)),
+		zap.Stringer("id", id),
 		zap.Any("usage", usage),
 		zap.Any("usageTotal", m.usage.GetUsage()),
 		zap.Any("capabilities", m.capabilities),
@@ -291,13 +318,13 @@ func (m *MinerCtx) releaseDeal(id OrderId) {
 	m.usage.Release(usage)
 }
 
-func (m *MinerCtx) OrderUsage(id OrderId) (*resource.Resources, error) {
+func (m *MinerCtx) OrderUsage(id OrderID) (*resource.Resources, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.orderUsage(id)
 }
 
-func (m *MinerCtx) orderUsage(id OrderId) (*resource.Resources, error) {
+func (m *MinerCtx) orderUsage(id OrderID) (*resource.Resources, error) {
 	usage, exists := m.usageMapping[id]
 	if !exists {
 		return nil, errOrderNotExists
@@ -308,12 +335,10 @@ func (m *MinerCtx) orderUsage(id OrderId) (*resource.Resources, error) {
 
 // Orders returns a list of allocated orders.
 // Useful for looking for a proper miner for starting tasks.
-//
-// TODO: rename to Deals()
-func (m *MinerCtx) Orders() []OrderId {
+func (m *MinerCtx) Orders() []OrderID {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	orders := []OrderId{}
+	orders := []OrderID{}
 	for id := range m.usageMapping {
 		orders = append(orders, id)
 	}
@@ -322,7 +347,7 @@ func (m *MinerCtx) Orders() []OrderId {
 
 func (m *MinerCtx) registerRoutes(ID string, routes []*pb.Route) []routeMapping {
 	var outRoutes []routeMapping
-	for _, route := range routes {
+	for id, route := range routes {
 		binding, err := util.ParsePortBinding(route.Port)
 		if err != nil {
 			log.G(m.ctx).Warn("failed to decode miner's port mapping",
@@ -332,10 +357,16 @@ func (m *MinerCtx) registerRoutes(ID string, routes []*pb.Route) []routeMapping 
 			continue
 		}
 
-		outRoute, err := m.router.RegisterRoute(ID,
-			binding.Network(),
-			route.Endpoint.GetAddr(),
-			uint16(route.GetEndpoint().GetPort()))
+		// TODO: It is possible here to save a couple of ports by squashing several real IPs with the same port.
+		// TODO: But first we need to fix worker by adding composition, because theoretically even with the same ports on different IPs can be different services. Also they must work under the same protocol.
+		vsID := fmt.Sprintf("%s#%d", ID, id)
+		vs, err := m.router.Register(vsID, binding.Network())
+		if err != nil {
+			log.G(m.ctx).Warn("failed to register route", zap.Error(err))
+			continue
+		}
+
+		outRoute, err := vs.AddReal(vsID, route.Endpoint.GetAddr(), uint16(route.GetEndpoint().GetPort()))
 		if err != nil {
 			log.G(m.ctx).Warn("failed to register route", zap.Error(err))
 			continue

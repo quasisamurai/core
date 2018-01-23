@@ -22,6 +22,7 @@ import (
 	"github.com/satori/uuid"
 	pb "github.com/sonm-io/core/proto"
 	"github.com/sonm-io/core/util"
+	"github.com/sonm-io/core/util/xgrpc"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -39,10 +40,10 @@ import (
 
 type ClusterEvent interface{}
 
-// Specific type of cluster event emited when new member joins cluster
+// Specific type of cluster event emitted when new member joins cluster
 type NewMemberEvent struct {
-	Id        string
-	endpoints []string
+	endpointsInfo
+	Id string
 }
 
 // Specific type of cluster event emited when leadership is transferred.
@@ -77,7 +78,8 @@ type Cluster interface {
 // otherwise.
 // Should be recalled when a cluster's master/slave state changes.
 // The channel is closed when the specified context is canceled.
-func NewCluster(ctx context.Context, cfg *ClusterConfig, creds credentials.TransportCredentials) (Cluster, <-chan ClusterEvent, error) {
+func NewCluster(ctx context.Context, cfg *ClusterConfig, workerEndpoint string,
+	creds credentials.TransportCredentials) (Cluster, <-chan ClusterEvent, error) {
 	clusterStore, err := makeStore(ctx, cfg)
 	if err != nil {
 		return nil, nil, err
@@ -88,7 +90,7 @@ func NewCluster(ctx context.Context, cfg *ClusterConfig, creds credentials.Trans
 		return nil, nil, err
 	}
 
-	endpoints, err := parseEndpoints(cfg)
+	clientEndpoints, workerEndpoints, err := getEndpoints(cfg, workerEndpoint)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -103,10 +105,10 @@ func NewCluster(ctx context.Context, cfg *ClusterConfig, creds credentials.Trans
 
 		isLeader:  true,
 		id:        uuid.NewV1().String(),
-		endpoints: endpoints,
+		endpoints: clientEndpoints,
 
 		clients:          make(map[string]*client),
-		clusterEndpoints: make(map[string][]string),
+		clusterEndpoints: make(map[string]*endpointsInfo),
 
 		eventChannel: make(chan ClusterEvent, 100),
 
@@ -118,7 +120,8 @@ func NewCluster(ctx context.Context, cfg *ClusterConfig, creds credentials.Trans
 	}
 
 	c.ctx, c.cancel = context.WithCancel(c.parentCtx)
-	c.registerMember(c.id, c.endpoints)
+
+	c.registerMember(c.id, clientEndpoints, workerEndpoints)
 
 	return &c, c.eventChannel, nil
 }
@@ -126,6 +129,11 @@ func NewCluster(ctx context.Context, cfg *ClusterConfig, creds credentials.Trans
 type client struct {
 	client pb.HubClient
 	conn   *grpc.ClientConn
+}
+
+type endpointsInfo struct {
+	client []string
+	worker []string
 }
 
 type cluster struct {
@@ -148,7 +156,7 @@ type cluster struct {
 	leaderLock sync.RWMutex
 
 	clients          map[string]*client
-	clusterEndpoints map[string][]string
+	clusterEndpoints map[string]*endpointsInfo
 	leaderId         string
 
 	eventChannel chan ClusterEvent
@@ -192,16 +200,19 @@ func (c *cluster) LeaderClient() (pb.HubClient, error) {
 	log.G(c.ctx).Debug("fetching leader client")
 	c.leaderLock.RLock()
 	defer c.leaderLock.RUnlock()
-	leaderEndpoints, ok := c.clusterEndpoints[c.leaderId]
-	if !ok || len(leaderEndpoints) == 0 {
+
+	endpts, ok := c.clusterEndpoints[c.leaderId]
+	if !ok || len(endpts.client) == 0 {
 		log.G(c.ctx).Warn("can not determine leader")
 		return nil, errors.New("can not determine leader")
 	}
+
 	client, ok := c.clients[c.leaderId]
 	if !ok || client == nil {
 		log.G(c.ctx).Warn("not connected to leader")
 		return nil, errors.New("not connected to leader")
 	}
+
 	return client.client, nil
 }
 
@@ -254,9 +265,11 @@ func (c *cluster) Members() ([]NewMemberEvent, error) {
 	result := make([]NewMemberEvent, 0)
 	c.leaderLock.RLock()
 	defer c.leaderLock.RUnlock()
-	for id, endpoints := range c.clusterEndpoints {
-		result = append(result, NewMemberEvent{id, endpoints})
+
+	for id, endpts := range c.clusterEndpoints {
+		result = append(result, NewMemberEvent{endpointsInfo: *endpts, Id: id})
 	}
+
 	return result, nil
 }
 
@@ -307,7 +320,7 @@ func (c *cluster) leaderWatch() error {
 }
 
 func (c *cluster) announce() error {
-	log.G(c.ctx).Info("starting announce goroutine", zap.Any("endpoints", c.endpoints), zap.String("ID", c.id))
+	log.G(c.ctx).Info("starting announce goroutine", zap.Any("endpointsInfo", c.endpoints), zap.String("ID", c.id))
 	endpointsData, _ := json.Marshal(c.endpoints)
 	ticker := time.NewTicker(makeDuration(c.cfg.AnnounceTTL))
 	defer ticker.Stop()
@@ -512,7 +525,7 @@ func (c *cluster) watchEvents() error {
 func (c *cluster) nameByEntity(entity interface{}) (string, error) {
 	c.registeredEntitiesMu.RLock()
 	defer c.registeredEntitiesMu.RUnlock()
-	t := reflect.TypeOf(entity)
+	t := reflect.Indirect(reflect.ValueOf(entity)).Type()
 	name, ok := c.entityNames[t]
 	if !ok {
 		return "", errors.New("entity " + t.String() + " is not registered")
@@ -535,11 +548,11 @@ func makeStore(ctx context.Context, cfg *ClusterConfig) (store.Store, error) {
 	boltdb.Register()
 	log.G(ctx).Info("creating store", zap.Any("store", cfg))
 
-	endpoints := []string{cfg.Store.Endpoint}
-
-	backend := store.Backend(cfg.Store.Type)
-
-	var tlsConf *tls.Config
+	var (
+		endpts  = []string{cfg.Store.Endpoint}
+		backend = store.Backend(cfg.Store.Type)
+		tlsConf *tls.Config
+	)
 	if len(cfg.Store.CertFile) != 0 && len(cfg.Store.KeyFile) != 0 {
 		cer, err := tls.LoadX509KeyPair(cfg.Store.CertFile, cfg.Store.KeyFile)
 		if err != nil {
@@ -554,7 +567,8 @@ func makeStore(ctx context.Context, cfg *ClusterConfig) (store.Store, error) {
 		TLS: tlsConf,
 	}
 	config.Bucket = cfg.Store.Bucket
-	return libkv.NewStore(backend, endpoints, &config)
+
+	return libkv.NewStore(backend, endpts, &config)
 }
 
 func (c *cluster) close(err error) {
@@ -573,7 +587,7 @@ func (c *cluster) emitLeadershipEvent() {
 	c.eventChannel <- LeadershipEvent{
 		Held:            c.isLeader,
 		LeaderId:        c.leaderId,
-		LeaderEndpoints: endpoints,
+		LeaderEndpoints: endpoints.client,
 	}
 }
 
@@ -594,44 +608,52 @@ func (c *cluster) registerMemberFromKV(member *store.KVPair) error {
 		return nil
 	}
 
-	endpoints := make([]string, 0)
-	err := json.Unmarshal(member.Value, &endpoints)
+	endpts := &endpointsInfo{}
+	err := json.Unmarshal(member.Value, &endpts)
 	if err != nil {
 		return err
 	}
-	return c.registerMember(id, endpoints)
+
+	return c.registerMember(id, endpts.client, endpts.worker)
 }
 
-func (c *cluster) registerMember(id string, endpoints []string) error {
-	log.G(c.ctx).Info("fetched endpoints of new member", zap.Any("endpoints", endpoints))
+func (c *cluster) registerMember(id string, clientEndpoints, workerEndpoints []string) error {
+	log.G(c.ctx).Info("fetched endpointsInfo of new member",
+		zap.Any("client_endpoints", clientEndpoints),
+		zap.Any("worker_endpoints", workerEndpoints))
 	c.leaderLock.Lock()
-	c.clusterEndpoints[id] = endpoints
-	c.eventChannel <- NewMemberEvent{id, endpoints}
+	c.clusterEndpoints[id] = &endpointsInfo{client: clientEndpoints, worker: workerEndpoints}
+	c.eventChannel <- NewMemberEvent{endpointsInfo: *c.clusterEndpoints[id], Id: id}
 	c.leaderLock.Unlock()
 
 	if id == c.id {
 		return nil
 	}
 
-	for _, ep := range endpoints {
-		conn, err := util.MakeGrpcClient(c.ctx, ep, c.creds, grpc.WithBlock(), grpc.WithTimeout(time.Second*5))
+	for _, ep := range clientEndpoints {
+		conn, err := xgrpc.NewClient(c.ctx, ep, c.creds, grpc.WithBlock(), grpc.WithTimeout(time.Second*5))
 		if err != nil {
 			log.G(c.ctx).Warn("could not connect to hub", zap.String("endpoint", ep), zap.Error(err))
 			continue
 		} else {
 			log.G(c.ctx).Info("successfully connected to cluster member")
 			c.leaderLock.Lock()
-			defer c.leaderLock.Unlock()
+
 			_, ok := c.clients[id]
 			if ok {
 				log.G(c.ctx).Info("duplicated connection - dropping")
 				conn.Close()
+				c.leaderLock.Unlock()
+
 				return nil
 			}
 			c.clients[id] = &client{pb.NewHubClient(conn), conn}
+			c.leaderLock.Unlock()
+
 			return nil
 		}
 	}
+
 	return errors.New("could not connect to any provided member endpoint")
 }
 
@@ -644,26 +666,52 @@ func makeDuration(numSeconds uint64) time.Duration {
 	return time.Second * time.Duration(numSeconds)
 }
 
-func parseEndpoints(config *ClusterConfig) ([]string, error) {
-	endpoints := make([]string, 0)
-	host, port, err := net.SplitHostPort(config.Endpoint)
-	if len(host) != 0 {
-		endpoints = append(endpoints, config.Endpoint)
-		return endpoints, nil
+func getEndpoints(config *ClusterConfig, workerEndpoint string) (clientEndpoints, workerEndpoints []string, err error) {
+	clientEndpoint := config.AnnounceEndpoint
+	if len(clientEndpoint) == 0 {
+		clientEndpoint = config.Endpoint
 	}
 
+	clientEndpoints, err = parseEndpoints(clientEndpoint)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "failed to get client endpointsInfo")
+	}
+
+	workerEndpoints, err = parseEndpoints(workerEndpoint)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "failed to get worker endpointsInfo")
+	}
+
+	return
+}
+
+func parseEndpoints(endpoint string) (endpts []string, err error) {
+	ipAddr, port, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(ipAddr) != 0 {
+		ip := net.ParseIP(ipAddr)
+		if ip == nil {
+			return nil, fmt.Errorf(
+				"client endpoint %s must be a valid IP", ipAddr)
+		}
+
+		if !ip.IsUnspecified() {
+			endpts = append(endpts, endpoint)
+
+			return endpts, nil
+		}
+	}
 	systemIPs, err := util.GetAvailableIPs()
 	if err != nil {
 		return nil, err
 	}
 
 	for _, ip := range systemIPs {
-		if ip4 := ip.To4(); ip4 != nil {
-			endpoints = append(endpoints, ip4.String()+":"+port)
-		} else {
-			endpoints = append(endpoints, "["+ip.String()+"]:"+port)
-		}
+		endpts = append(endpts, net.JoinHostPort(ip.String(), port))
 	}
 
-	return endpoints, nil
+	return endpts, nil
 }
