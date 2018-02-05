@@ -3,6 +3,7 @@ package miner
 import (
 	"crypto/ecdsa"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"strconv"
@@ -14,11 +15,14 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/go-connections/nat"
 	"github.com/gliderlabs/ssh"
+	"github.com/grpc-ecosystem/go-grpc-prometheus"
 	log "github.com/noxiouz/zapctx/ctxlog"
 	"github.com/pborman/uuid"
 	"github.com/pkg/errors"
 	"github.com/sonm-io/core/insonmnia/auth"
 	"github.com/sonm-io/core/insonmnia/hardware"
+	"github.com/sonm-io/core/insonmnia/miner/plugin"
+	"github.com/sonm-io/core/insonmnia/miner/volume"
 	"github.com/sonm-io/core/insonmnia/resource"
 	"github.com/sonm-io/core/insonmnia/structs"
 	pb "github.com/sonm-io/core/proto"
@@ -38,6 +42,8 @@ type Miner struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	grpcServer *grpc.Server
+
+	plugins *plugin.Repository
 
 	// Miner name for nice self-representation.
 	name      string
@@ -105,43 +111,30 @@ func NewMiner(cfg Config, opts ...Option) (m *Miner, err error) {
 		o.uuid = uuid.New()
 	}
 
-	ctx, cancel := context.WithCancel(o.ctx)
-	if o.ovs == nil {
-		o.ovs, err = NewOverseer(ctx, cfg.GPU())
-		if err != nil {
-			cancel()
-			return nil, err
-		}
-	}
-
 	if o.hardware == nil {
 		o.hardware = hardware.New()
 	}
 
 	hardwareInfo, err := o.hardware.Info()
 	if err != nil {
-		cancel()
 		return nil, err
 	}
 
-	log.G(ctx).Info("collected hardware info", zap.Any("hw", hardwareInfo))
+	log.G(o.ctx).Info("collected hardware info", zap.Any("hw", hardwareInfo))
 
 	cgroup, cGroupManager, err := makeCgroupManager(cfg.HubResources())
 	if err != nil {
-		cancel()
 		return nil, err
 	}
 
 	if o.locatorClient == nil {
 		_, TLSConf, err := util.NewHitlessCertRotator(o.ctx, o.key)
 		if err != nil {
-			cancel()
 			return nil, errors.Wrap(err, "failed to create locator client")
 		}
 
 		locatorCC, err := xgrpc.NewWalletAuthenticatedClient(o.ctx, util.NewTLS(TLSConf), cfg.LocatorEndpoint())
 		if err != nil {
-			cancel()
 			return nil, errors.Wrap(err, "failed to create locator client")
 		}
 
@@ -149,30 +142,27 @@ func NewMiner(cfg Config, opts ...Option) (m *Miner, err error) {
 	}
 
 	// The rotator will be stopped by ctx
-	certRotator, TLSConf, err := util.NewHitlessCertRotator(ctx, o.key)
+	certRotator, TLSConf, err := util.NewHitlessCertRotator(o.ctx, o.key)
 	if err != nil {
-		cancel()
 		return nil, err
 	}
 
 	hubEndpoint, err := o.getHubConnectionInfo(cfg)
 	if err != nil {
-		cancel()
 		return nil, err
 	}
 
 	creds := auth.NewWalletAuthenticator(util.NewTLS(TLSConf), hubEndpoint.EthAddress)
-	grpcServer := xgrpc.NewServer(log.GetLogger(ctx),
+	grpcServer := xgrpc.NewServer(log.GetLogger(o.ctx),
 		xgrpc.Credentials(creds),
 		xgrpc.DefaultTraceInterceptor(),
 	)
 
 	if !platformSupportCGroups && cfg.HubResources() != nil {
-		log.G(ctx).Warn("your platform does not support CGroup, but the config has resources section")
+		log.G(o.ctx).Warn("your platform does not support CGroup, but the config has resources section")
 	}
 
 	if err := o.setupNetworkOptions(cfg); err != nil {
-		cancel()
 		return nil, errors.Wrap(err, "failed to set up network options")
 	}
 
@@ -180,11 +170,30 @@ func NewMiner(cfg Config, opts ...Option) (m *Miner, err error) {
 		zap.Any("public IPs", o.publicIPs),
 		zap.Any("nat", o.nat))
 
+	plugins, err := plugin.NewRepository(o.ctx, cfg.Plugins())
+	if err != nil {
+		return nil, err
+	}
+
+	if o.ssh == nil {
+		o.ssh = nilSSH{}
+	}
+
+	ctx, cancel := context.WithCancel(o.ctx)
+	if o.ovs == nil {
+		o.ovs, err = NewOverseer(ctx, plugins)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	m = &Miner{
 		ctx:        ctx,
 		cancel:     cancel,
 		grpcServer: grpcServer,
 		ovs:        o.ovs,
+
+		plugins: plugins,
 
 		name:      o.uuid,
 		hardware:  hardwareInfo,
@@ -210,6 +219,7 @@ func NewMiner(cfg Config, opts ...Option) (m *Miner, err error) {
 	}
 
 	pb.RegisterMinerServer(grpcServer, m)
+	grpc_prometheus.Register(grpcServer)
 
 	return m, nil
 }
@@ -226,11 +236,9 @@ type resourceHandle interface {
 // NilResourceHandle is a resource handle that does nothing.
 type nilResourceHandle struct{}
 
-func (h *nilResourceHandle) commit() {
-}
+func (h *nilResourceHandle) commit() {}
 
-func (h *nilResourceHandle) release() {
-}
+func (h *nilResourceHandle) release() {}
 
 type ownedResourceHandle struct {
 	miner     *Miner
@@ -444,12 +452,16 @@ func (m *Miner) Save(request *pb.SaveRequest, stream pb.Miner_SaveServer) error 
 func (m *Miner) Start(ctx context.Context, request *pb.MinerStartRequest) (*pb.MinerStartReply, error) {
 	log.G(m.ctx).Info("handling Start request", zap.Any("request", request))
 
+	if request.GetContainer() == nil {
+		return nil, fmt.Errorf("container field is required")
+	}
+
 	resources, err := structs.NewTaskResources(request.GetResources())
 	if err != nil {
 		return nil, err
 	}
 
-	publicKey, err := parsePublicKey(request.PublicKeyData)
+	publicKey, err := parsePublicKey(request.Container.PublicKeyData)
 	if err != nil {
 		return nil, status.Errorf(codes.Unauthenticated, "invalid public key provided %v", err)
 	}
@@ -461,17 +473,28 @@ func (m *Miner) Start(ctx context.Context, request *pb.MinerStartRequest) (*pb.M
 	// This can be canceled by using "resourceHandle.commit()".
 	defer resourceHandle.release()
 
+	mounts := make([]volume.Mount, 0)
+	for _, spec := range request.Container.Mounts {
+		mount, err := volume.NewMount(spec)
+		if err != nil {
+			return nil, err
+		}
+		mounts = append(mounts, mount)
+	}
+
 	var d = Description{
-		Image:         request.Image,
-		Registry:      request.Registry,
-		Auth:          request.Auth,
+		Image:         request.Container.Image,
+		Registry:      request.Container.Registry,
+		Auth:          request.Container.Auth,
 		RestartPolicy: transformRestartPolicy(request.RestartPolicy),
 		Resources:     resources.ToContainerResources(cgroup.Suffix()),
 		DealId:        request.GetOrderId(),
 		TaskId:        request.Id,
-		CommitOnStop:  request.CommitOnStop,
-		Env:           request.Env,
+		CommitOnStop:  request.Container.CommitOnStop,
+		Env:           request.Container.Env,
 		GPURequired:   resources.RequiresGPU(),
+		volumes:       request.Container.Volumes,
+		mounts:        mounts,
 	}
 
 	// TODO: Detect whether it's the first time allocation. If so - release resources on error.
@@ -497,42 +520,39 @@ func (m *Miner) Start(ctx context.Context, request *pb.MinerStartRequest) (*pb.M
 	containerInfo.StartAt = time.Now()
 	containerInfo.ImageName = d.Image
 
-	var rpl = pb.MinerStartReply{
+	var reply = pb.MinerStartReply{
 		Container: containerInfo.ID,
-		Routes:    []*pb.Route{},
+		PortMap:   make(map[string]*pb.Endpoints, 0),
 	}
 
-	for port, initialPortBindings := range containerInfo.Ports {
-		if len(initialPortBindings) < 1 {
+	for internalPort, portBindings := range containerInfo.Ports {
+		if len(portBindings) < 1 {
 			continue
 		}
 
-		internalPortStr := initialPortBindings[0].HostPort
-		internalPortUint, err := strconv.ParseUint(internalPortStr, 10, 16)
-		if err != nil {
-			log.G(m.ctx).Warn("failed to convert real port to uint16",
-				zap.Error(err),
-				zap.String("port", internalPortStr),
-			)
+		var socketAddrs []*pb.SocketAddr
+		var pubPortBindings []nat.PortBinding
 
-			continue
-		}
+		for _, portBinding := range portBindings {
+			hostPort := portBinding.HostPort
+			hostPortInt, err := nat.ParsePort(hostPort)
+			if err != nil {
+				return nil, err
+			}
 
-		var fixedPortBindings []nat.PortBinding
-		for _, publicIP := range m.publicIPs {
-			fixedPortBindings = append(fixedPortBindings, nat.PortBinding{
-				HostIP: publicIP, HostPort: internalPortStr})
-
-			rpl.Routes = append(rpl.Routes, &pb.Route{
-				Port: string(port),
-				Endpoint: &pb.SocketAddr{
+			for _, publicIP := range m.publicIPs {
+				socketAddrs = append(socketAddrs, &pb.SocketAddr{
 					Addr: publicIP,
-					Port: uint32(internalPortUint),
-				},
-			})
+					Port: uint32(hostPortInt),
+				})
+
+				pubPortBindings = append(pubPortBindings, nat.PortBinding{HostIP: publicIP, HostPort: hostPort})
+			}
 		}
 
-		containerInfo.Ports[port] = fixedPortBindings
+		containerInfo.Ports[internalPort] = pubPortBindings
+
+		reply.PortMap[string(internalPort)] = &pb.Endpoints{Endpoints: socketAddrs}
 	}
 
 	m.saveContainerInfo(request.Id, containerInfo)
@@ -541,7 +561,7 @@ func (m *Miner) Start(ctx context.Context, request *pb.MinerStartRequest) (*pb.M
 
 	resourceHandle.commit()
 
-	return &rpl, nil
+	return &reply, nil
 }
 
 func (m *Miner) consume(orderId string, resources *structs.TaskResources) (cGroup, resourceHandle, error) {
@@ -800,53 +820,40 @@ func (m *Miner) connectToHub(address string) {
 	}
 }
 
+func (m *Miner) startSSH() {
+	switch err := m.ssh.Run(); err {
+	case nil, ssh.ErrServerClosed:
+		log.G(m.ctx).Info("ssh server closed", zap.Error(err))
+	default:
+		log.G(m.ctx).Error("failed to run SSH server", zap.Error(err))
+		m.cancel()
+	}
+}
+
+func (m *Miner) startHubConnection() {
+	t := time.NewTicker(time.Second * 5)
+	defer t.Stop()
+
+	m.connectToHub(m.hubAddress)
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-t.C:
+			m.connectToHub(m.hubAddress)
+		}
+	}
+}
+
 // Serve starts discovery of Hubs,
 // accepts incoming connections from a Hub
 func (m *Miner) Serve() error {
-	var grpcError error
-	var wg sync.WaitGroup
+	go func() { m.startSSH() }()
+	go func() { m.startHubConnection() }()
+	go func() { m.grpcServer.Serve(m.rl) }()
 
-	if m.ssh != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			log.G(m.ctx).Info("starting ssh server")
-			switch sshErr := m.ssh.Run(m); sshErr {
-			case nil, ssh.ErrServerClosed:
-				log.G(m.ctx).Info("closed ssh server")
-			default:
-				log.G(m.ctx).Error("failed to run SSH server", zap.Error(sshErr))
-			}
-			m.Close()
-		}()
-	}
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		grpcError = m.grpcServer.Serve(m.rl)
-		m.Close()
-	}()
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
-		t := time.NewTicker(time.Second * 5)
-		defer t.Stop()
-		m.connectToHub(m.hubAddress)
-		for {
-			select {
-			case <-m.ctx.Done():
-				return
-			case <-t.C:
-				m.connectToHub(m.hubAddress)
-			}
-		}
-	}()
-	wg.Wait()
-
-	return grpcError
+	<-m.ctx.Done()
+	return m.ctx.Err()
 }
 
 // Close disposes all resources related to the Miner
@@ -854,17 +861,12 @@ func (m *Miner) Close() {
 	log.G(m.ctx).Info("closing miner")
 
 	m.cancel()
+
 	m.grpcServer.Stop()
-
-	if m.ssh != nil {
-		m.ssh.Close()
-	}
-
-	if m.certRotator != nil {
-		m.certRotator.Close()
-	}
-
+	m.certRotator.Close()
+	m.ssh.Close()
 	m.ovs.Close()
 	m.rl.Close()
 	m.controlGroup.Delete()
+	m.plugins.Close()
 }

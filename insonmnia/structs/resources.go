@@ -11,7 +11,10 @@ import (
 )
 
 var (
-	errResourcesRequired = errors.New("resources field is required")
+	// The CPU CFS scheduler period in nanoseconds. Used alongside CPU quota.
+	defaultCPUPeriod        = int64(100000)
+	errResourcesRequired    = errors.New("resources field is required")
+	ErrUnsupportedSingleGPU = errors.New("unsupported gpu count, use MULTIPLE_GPU instead")
 )
 
 // Resources wraps the underlying protobuf object with full validation, such
@@ -64,6 +67,11 @@ func ValidateResources(resources *pb.Resources) error {
 	if resources == nil {
 		return errResourcesIsNil
 	}
+
+	if resources.GetGpuCount() == pb.GPUCount_SINGLE_GPU {
+		return ErrUnsupportedSingleGPU
+	}
+
 	return nil
 }
 
@@ -132,6 +140,8 @@ func (r *TaskResources) ToUsage() resource.Resources {
 func (r *TaskResources) ToContainerResources(cgroupParent string) container.Resources {
 	return container.Resources{
 		CgroupParent: cgroupParent,
+		CPUQuota:     r.cpuQuota(),
+		CPUPeriod:    defaultCPUPeriod,
 		Memory:       r.inner.GetMaxMemory(),
 	}
 }
@@ -144,4 +154,8 @@ func (r *TaskResources) ToCgroupResources() *specs.LinuxResources {
 			Limit: &maxMemory,
 		},
 	}
+}
+
+func (r *TaskResources) cpuQuota() int64 {
+	return defaultCPUPeriod * int64(r.inner.GetCPUCores())
 }

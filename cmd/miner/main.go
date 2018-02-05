@@ -1,37 +1,34 @@
 package main
 
 import (
-	"fmt"
 	"io/ioutil"
 	"os"
 	"os/signal"
 
 	log "github.com/noxiouz/zapctx/ctxlog"
-	flag "github.com/ogier/pflag"
 	"github.com/pborman/uuid"
+	"github.com/sonm-io/core/cmd"
 	"github.com/sonm-io/core/insonmnia/logging"
 	"github.com/sonm-io/core/insonmnia/miner"
+	"github.com/sonm-io/core/util"
 	"go.uber.org/zap"
 	"golang.org/x/net/context"
 )
 
 var (
-	configPath  = flag.String("config", "worker.yaml", "Path to miner config file")
-	showVersion = flag.BoolP("version", "v", false, "Show Hub version and exit")
-	version     string
+	configFlag  string
+	versionFlag bool
+	appVersion  string
 )
 
 func main() {
-	flag.Parse()
+	cmd.NewCmd("worker", appVersion, &configFlag, &versionFlag, run).Execute()
+}
 
-	if *showVersion {
-		fmt.Printf("SONM Miner %s\r\n", version)
-		return
-	}
-
+func run() {
 	ctx := context.Background()
 
-	cfg, err := miner.NewConfig(*configPath)
+	cfg, err := miner.NewConfig(configFlag)
 	if err != nil {
 		log.G(ctx).Error("cannot load config", zap.Error(err))
 		os.Exit(1)
@@ -54,10 +51,10 @@ func main() {
 	}
 
 	workerID := string(uuidData)
-
 	logger := logging.BuildLogger(cfg.Logging().Level, true)
 	ctx = log.WithLogger(ctx, logger)
 
+	ctx, cancel := context.WithCancel(ctx)
 	m, err := miner.NewMiner(cfg, miner.WithContext(ctx), miner.WithKey(key), miner.WithUUID(workerID))
 	if err != nil {
 		log.G(ctx).Error("cannot create worker instance", zap.Error(err))
@@ -68,11 +65,14 @@ func main() {
 		c := make(chan os.Signal, 1)
 		signal.Notify(c, os.Interrupt)
 		<-c
-		m.Close()
+		cancel()
 	}()
 
-	// TODO: check error type
+	go util.StartPrometheus(ctx, cfg.MetricsListenAddr())
+
 	if err = m.Serve(); err != nil {
 		log.G(ctx).Error("Server stop", zap.Error(err))
 	}
+
+	m.Close()
 }

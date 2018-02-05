@@ -53,7 +53,7 @@ var (
 )
 
 func init() {
-	rootCmd.PersistentFlags().StringVar(&nodeAddressFlag, "node", "127.0.0.1:9999", "node addr")
+	rootCmd.PersistentFlags().StringVar(&nodeAddressFlag, "node", "127.0.0.1:15030", "node addr")
 	rootCmd.PersistentFlags().DurationVar(&timeoutFlag, "timeout", 60*time.Second, "Connection timeout")
 	rootCmd.PersistentFlags().StringVar(&outputModeFlag, "out", "", "Output mode: simple or json")
 
@@ -62,8 +62,10 @@ func init() {
 }
 
 // Root configure and return root command
-func Root(c config.Config) *cobra.Command {
+func Root(appVersion string, c config.Config) *cobra.Command {
+	version = appVersion
 	cfg = c
+
 	rootCmd.SetOutput(os.Stdout)
 	return rootCmd
 }

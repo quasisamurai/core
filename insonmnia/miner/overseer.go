@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sonm-io/core/insonmnia/miner/plugin"
+	"github.com/sonm-io/core/insonmnia/miner/volume"
 	"go.uber.org/zap"
 
 	"github.com/docker/docker/api/types"
@@ -19,7 +21,6 @@ import (
 	"github.com/docker/go-connections/nat"
 	"github.com/gliderlabs/ssh"
 	log "github.com/noxiouz/zapctx/ctxlog"
-	"github.com/sonm-io/core/insonmnia/miner/gpu"
 	"github.com/sonm-io/core/insonmnia/resource"
 	pb "github.com/sonm-io/core/proto"
 )
@@ -41,6 +42,25 @@ type Description struct {
 	CommitOnStop  bool
 
 	GPURequired bool
+
+	volumes map[string]*pb.Volume
+	mounts  []volume.Mount
+}
+
+func (d *Description) ID() string {
+	return d.TaskId
+}
+
+func (d *Description) Volumes() map[string]*pb.Volume {
+	return d.volumes
+}
+
+func (d *Description) Mounts(source string) []volume.Mount {
+	return d.mounts
+}
+
+func (d *Description) GPU() bool {
+	return d.GPURequired
 }
 
 func (d *Description) FormatEnv() []string {
@@ -123,7 +143,7 @@ type Overseer interface {
 	// Stop terminates the container.
 	Stop(ctx context.Context, containerID string) error
 
-	// Returns runtime statistics collected from all running containers.
+	// Info returns runtime statistics collected from all running containers.
 	//
 	// Depending on the implementation this can be cached.
 	Info(ctx context.Context) (map[string]ContainerMetrics, error)
@@ -139,13 +159,11 @@ type overseer struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
+	plugins *plugin.Repository
+
 	client *client.Client
 
 	registryAuth map[string]string
-
-	// GPU tuner
-	gpuCfg   *gpu.Config
-	gpuTuner gpu.Tuner
 
 	// protects containers map
 	mu         sync.Mutex
@@ -154,34 +172,22 @@ type overseer struct {
 }
 
 func (o *overseer) supportGPU() bool {
-	return o.gpuCfg != nil
+	return o.plugins.HasGPU()
 }
 
 // NewOverseer creates new overseer
-func NewOverseer(ctx context.Context, gpuCfg *gpu.Config) (Overseer, error) {
+func NewOverseer(ctx context.Context, plugins *plugin.Repository) (Overseer, error) {
 	dockerClient, err := client.NewEnvClient()
 	if err != nil {
 		return nil, err
 	}
 
-	var tuner gpu.Tuner = gpu.NilTuner{}
-	if gpuCfg != nil {
-		tuner, err = gpu.New(ctx, gpuCfg)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	ctx, cancel := context.WithCancel(ctx)
 	ovr := &overseer{
-		ctx:    ctx,
-		cancel: cancel,
-
-		client: dockerClient,
-
-		gpuCfg:   gpuCfg,
-		gpuTuner: tuner,
-
+		ctx:        ctx,
+		cancel:     cancel,
+		plugins:    plugins,
+		client:     dockerClient,
 		containers: make(map[string]*containerDescriptor),
 		statuses:   make(map[string]chan pb.TaskStatusReply_Status),
 	}
@@ -212,7 +218,6 @@ func (o *overseer) Info(ctx context.Context) (map[string]ContainerMetrics, error
 
 func (o *overseer) Close() error {
 	o.cancel()
-	o.gpuTuner.Close()
 	return nil
 }
 
@@ -248,6 +253,7 @@ func (o *overseer) handleStreamingEvents(ctx context.Context, sinceUnix int64, f
 				delete(o.containers, id)
 				delete(o.statuses, id)
 				o.mu.Unlock()
+
 				if !containerFound {
 					// NOTE: it could be orphaned container from our previous launch
 					log.G(ctx).Warn("unknown container with sonm tag will be removed", zap.String("id", id))
@@ -265,7 +271,10 @@ func (o *overseer) handleStreamingEvents(ctx context.Context, sinceUnix int64, f
 						if err != nil {
 							log.G(ctx).Error("failed to commit container", zap.String("id", id), zap.Error(err))
 						}
-						c.remove()
+
+						if err := c.Cleanup(); err != nil {
+							log.G(ctx).Error("failed to clean up container", zap.String("id", id), zap.Error(err))
+						}
 						c.cancel()
 					}()
 				}
@@ -417,16 +426,19 @@ func (o *overseer) Spool(ctx context.Context, d Description) error {
 }
 
 func (o *overseer) Start(ctx context.Context, description Description) (status chan pb.TaskStatusReply_Status, cinfo ContainerInfo, err error) {
-	var tuner gpu.Tuner = gpu.NilTuner{}
+	// TODO: do we really need this check in that place?
+	// TODO: maybe will be better to check somewhere into the "newContainer()" method?
 	if description.GPURequired {
 		if !o.supportGPU() {
 			err = fmt.Errorf("GPU required but not supported or disabled")
 			return
 		}
-		tuner = o.gpuTuner
 	}
 
-	pr, err := newContainer(ctx, o.client, description, tuner)
+	// TODO: Well, we should refactor those dozens of arguments.
+	// Note: maybe will be better to make the "newContainer()" func as part of the overseer struct
+	// ( in that case we can access docker client and plugins repo from the Ovs instance. )
+	pr, err := newContainer(ctx, o.client, description, o.plugins)
 	if err != nil {
 		return
 	}

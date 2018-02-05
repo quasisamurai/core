@@ -6,6 +6,7 @@ import (
 	"io"
 	"path/filepath"
 
+	"github.com/sonm-io/core/insonmnia/miner/plugin"
 	"go.uber.org/zap"
 
 	"github.com/docker/distribution/reference"
@@ -15,7 +16,6 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/gliderlabs/ssh"
 	log "github.com/noxiouz/zapctx/ctxlog"
-	"github.com/sonm-io/core/insonmnia/miner/gpu"
 )
 
 type containerDescriptor struct {
@@ -27,9 +27,11 @@ type containerDescriptor struct {
 	ID          string
 	description Description
 	stats       types.StatsJSON
+
+	cleanup plugin.Cleanup
 }
 
-func newContainer(ctx context.Context, dockerClient *client.Client, d Description, tuner gpu.Tuner) (*containerDescriptor, error) {
+func newContainer(ctx context.Context, dockerClient *client.Client, d Description, tuners *plugin.Repository) (*containerDescriptor, error) {
 	log.G(ctx).Info("start container with application")
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -75,9 +77,11 @@ func newContainer(ctx context.Context, dockerClient *client.Client, d Descriptio
 
 	var networkingConfig network.NetworkingConfig
 
-	if err := tuner.Tune(&hostConfig); err != nil {
+	cleanup, err := tuners.Tune(&d, &hostConfig)
+	if err != nil {
 		return nil, err
 	}
+
 	// create new container
 	// assign resulted containerid
 	// log all warnings
@@ -87,6 +91,7 @@ func newContainer(ctx context.Context, dockerClient *client.Client, d Descriptio
 	}
 	cont.ID = resp.ID
 	cont.ctx = log.WithLogger(cont.ctx, log.G(ctx).With(zap.String("id", cont.ID)))
+	cont.cleanup = cleanup
 	if len(resp.Warnings) > 0 {
 		log.G(ctx).Warn("ContainerCreate finished with warnings", zap.Strings("warnings", resp.Warnings))
 	}
@@ -141,7 +146,7 @@ func (c *containerDescriptor) execCommand(cmd []string, env []string, isTty bool
 				if !ok {
 					return
 				}
-				log.G(c.ctx).Info("resising tty", zap.Int("height", w.Height), zap.Int("width", w.Width))
+				log.G(c.ctx).Info("resizing tty", zap.Int("height", w.Height), zap.Int("width", w.Width))
 				err = c.client.ContainerExecResize(c.ctx, execId.ID, types.ResizeOptions{Height: uint(w.Height), Width: uint(w.Width)})
 				if err != nil {
 					log.G(c.ctx).Warn("ContainerExecResize finished with error", zap.Error(err))
@@ -167,6 +172,10 @@ func (c *containerDescriptor) Kill() (err error) {
 
 func (c *containerDescriptor) remove() {
 	containerRemove(c.ctx, c.client, c.ID)
+}
+
+func (c *containerDescriptor) Cleanup() error {
+	return c.cleanup.Close()
 }
 
 func containerRemove(ctx context.Context, client client.APIClient, id string) {

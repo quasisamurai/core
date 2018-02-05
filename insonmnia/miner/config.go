@@ -5,7 +5,7 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
 	"github.com/sonm-io/core/accounts"
-	"github.com/sonm-io/core/insonmnia/miner/gpu"
+	"github.com/sonm-io/core/insonmnia/miner/plugin"
 )
 
 // HubConfig describes Hub configuration.
@@ -20,11 +20,6 @@ type HubConfig struct {
 type FirewallConfig struct {
 	// STUN server endpoint (with port).
 	Server string `yaml:"server"`
-}
-
-// GPUConfig contains options related to NVIDIA GPU support
-type GPUConfig struct {
-	NvidiaDockerDriver string `yaml:"nvidiadockerdriver"`
 }
 
 type SSHConfig struct {
@@ -46,15 +41,16 @@ type LocatorConfig struct {
 }
 
 type config struct {
-	HubConfig       HubConfig           `required:"true" yaml:"hub"`
-	FirewallConfig  *FirewallConfig     `required:"false" yaml:"firewall"`
-	Eth             *accounts.EthConfig `yaml:"ethereum"`
-	GPUConfig       *gpu.Config         `required:"false" yaml:"GPUConfig"`
-	SSHConfig       *SSHConfig          `required:"false" yaml:"ssh"`
-	LoggingConfig   LoggingConfig       `yaml:"logging"`
-	LocatorConfig   *LocatorConfig      `required:"true" yaml:"locator"`
-	UUIDPathConfig  string              `required:"false" yaml:"uuid_path"`
-	PublicIPsConfig []string            `required:"false" yaml:"public_ip_addrs"`
+	HubConfig               HubConfig           `required:"true" yaml:"hub"`
+	FirewallConfig          *FirewallConfig     `required:"false" yaml:"firewall"`
+	Eth                     *accounts.EthConfig `yaml:"ethereum"`
+	SSHConfig               *SSHConfig          `required:"false" yaml:"ssh"`
+	LoggingConfig           LoggingConfig       `yaml:"logging"`
+	LocatorConfig           *LocatorConfig      `required:"true" yaml:"locator"`
+	UUIDPathConfig          string              `required:"false" yaml:"uuid_path"`
+	PublicIPsConfig         []string            `required:"false" yaml:"public_ip_addrs"`
+	MetricsListenAddrConfig string              `yaml:"metrics_listen_addr" default:"127.0.0.1:14001"`
+	PluginsConfig           plugin.Config       `yaml:"plugins"`
 }
 
 func (c *config) HubResolveEndpoints() bool {
@@ -81,10 +77,6 @@ func (c *config) PublicIPs() []string {
 	return c.PublicIPsConfig
 }
 
-func (c *config) GPU() *gpu.Config {
-	return c.GPUConfig
-}
-
 func (c *config) SSH() *SSHConfig {
 	return c.SSHConfig
 }
@@ -103,6 +95,14 @@ func (c *config) ETH() *accounts.EthConfig {
 
 func (c *config) LocatorEndpoint() string {
 	return c.LocatorConfig.Endpoint
+}
+
+func (c *config) MetricsListenAddr() string {
+	return c.MetricsListenAddrConfig
+}
+
+func (c *config) Plugins() plugin.Config {
+	return c.PluginsConfig
 }
 
 func (c *config) validate() error {
@@ -153,8 +153,6 @@ type Config interface {
 	Firewall() *FirewallConfig
 	// PublicIPs returns all IPs that can be used to communicate with the miner.
 	PublicIPs() []string
-	// GPU returns options about NVIDIA GPU support via nvidia-docker-plugin
-	GPU() *gpu.Config
 	// SSH returns settings for built-in ssh server
 	SSH() *SSHConfig
 	// Logging returns logging settings.
@@ -165,4 +163,9 @@ type Config interface {
 	ETH() *accounts.EthConfig
 	// LocatorEndpoint returns locator endpoint.
 	LocatorEndpoint() string
+	// MetricsListenAddr returns the address that can be used by Prometheus to get
+	// metrics.
+	MetricsListenAddr() string
+	// Plugins returns plugins settings.
+	Plugins() plugin.Config
 }

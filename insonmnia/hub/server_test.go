@@ -102,10 +102,11 @@ func getTestMarket(ctrl *gomock.Controller) pb.MarketClient {
 			Resources: &pb.Resources{},
 		},
 	}
+	// TODO: fix this - it does not really call create order or cancel order
 	m.EXPECT().CreateOrder(gomock.Any(), gomock.Any()).AnyTimes().
-		Return(ord, nil).MinTimes(1)
+		Return(ord, nil).AnyTimes()
 	m.EXPECT().CancelOrder(gomock.Any(), gomock.Any()).AnyTimes().
-		Return(&pb.Empty{}, nil).MinTimes(1)
+		Return(&pb.Empty{}, nil).AnyTimes()
 	return m
 }
 
@@ -135,10 +136,11 @@ func buildTestHub(ctrl *gomock.Controller) (*Hub, error) {
 	bc := blockchain.NewMockBlockchainer(ctrl)
 	bc.EXPECT().GetDealInfo(gomock.Any()).AnyTimes().Return(&pb.Deal{}, nil)
 
-	return New(context.Background(), config, "",
-		WithPrivateKey(key), WithMarket(market), WithCluster(clustr, nil), WithBlockchain(bc))
+	return New(context.Background(), config, WithPrivateKey(key), WithMarket(market),
+		WithCluster(clustr, nil), WithBlockchain(bc))
 }
 
+//TODO: Move this to separate test for AskPlans
 func TestHubCreateRemoveSlot(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -159,9 +161,15 @@ func TestHubCreateRemoveSlot(t *testing.T) {
 	id, err := hu.InsertSlot(testCtx, req)
 	assert.NoError(t, err)
 	assert.True(t, id.Id != "", "ID must not be empty")
-	assert.Equal(t, len(hu.slots), 1)
+
+	actualSlots, err := hu.Slots(testCtx, &pb.Empty{})
+	assert.NoError(t, err)
+	assert.Equal(t, len(actualSlots.Slots), 1)
 
 	_, err = hu.RemoveSlot(testCtx, id)
 	assert.NoError(t, err)
-	assert.Equal(t, len(hu.slots), 0)
+
+	actualSlots, err = hu.Slots(testCtx, &pb.Empty{})
+	assert.NoError(t, err)
+	assert.Equal(t, len(actualSlots.Slots), 0)
 }

@@ -74,6 +74,8 @@ func getTestEth(ctrl *gomock.Controller) blockchain.Blockchainer {
 		Return(deal, nil)
 	bc.EXPECT().OpenDealPending(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes().
 		Return(big.NewInt(1), nil)
+	bc.EXPECT().CloseDealPending(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes().
+		Return(nil)
 
 	return bc
 }
@@ -161,7 +163,7 @@ func TestCreateOrder_FullAsyncOrderHandler(t *testing.T) {
 	require.True(t, ok)
 
 	assert.Equal(t, statusDone, handlr.getStatus(),
-		fmt.Sprintf("Wait for status %s, but has %s", statusMap[statusDone], statusMap[handlr.getStatus()]))
+		fmt.Sprintf("Wait for status %s, but has %s", statusDone.String(), handlr.getStatus().String()))
 	assert.Equal(t, "1", handlr.dealID)
 }
 
@@ -197,7 +199,7 @@ func TestCreateOrder_CannotCreateHandler(t *testing.T) {
 	require.True(t, ok)
 
 	assert.Equal(t, statusFailed, handlr.getStatus(),
-		fmt.Sprintf("Wait for status %s, but has %s", statusMap[statusFailed], statusMap[handlr.getStatus()]))
+		fmt.Sprintf("Wait for status %s, but has %s", statusFailed.String(), handlr.getStatus().String()))
 	assert.Error(t, handlr.err)
 }
 
@@ -233,7 +235,7 @@ func TestCreateOrder_CannotFetchOrders(t *testing.T) {
 	require.True(t, ok)
 
 	assert.Equal(t, statusFailed, handlr.getStatus(),
-		fmt.Sprintf("Wait for status %s, but has %s", statusMap[statusFailed], statusMap[handlr.getStatus()]))
+		fmt.Sprintf("Wait for status %s, but has %s", statusFailed.String(), handlr.getStatus().String()))
 	assert.Error(t, handlr.err)
 	assert.EqualError(t, handlr.err, "TEST: cannot get orders")
 }
@@ -270,7 +272,7 @@ func TestCreateOrder_CannotNoMatchingOrders(t *testing.T) {
 	require.True(t, ok)
 
 	assert.Equal(t, statusSearching, handlr.getStatus(),
-		fmt.Sprintf("Wait for status %s, but has %s", statusMap[statusSearching], statusMap[handlr.getStatus()]))
+		fmt.Sprintf("Wait for status %s, but has %s", statusSearching.String(), handlr.getStatus().String()))
 	require.NoError(t, handlr.err)
 }
 
@@ -305,7 +307,7 @@ func TestCreateOrder_CannotResolveHubIP(t *testing.T) {
 	require.True(t, ok)
 
 	assert.Equal(t, statusFailed, handlr.getStatus(),
-		fmt.Sprintf("Wait for status %s, but has %s", statusMap[statusFailed], statusMap[handlr.getStatus()]))
+		fmt.Sprintf("Wait for status %s, but has %s", statusFailed.String(), handlr.getStatus().String()))
 	assert.Error(t, handlr.err)
 	assert.EqualError(t, handlr.err, errProposeNotAccepted.Error())
 }
@@ -351,7 +353,7 @@ func TestCreateOrder_CannotCreateDeal(t *testing.T) {
 	require.True(t, ok)
 
 	assert.Equal(t, statusFailed, handlr.getStatus(),
-		fmt.Sprintf("Wait for status %s, but has %s", statusMap[statusFailed], statusMap[handlr.getStatus()]))
+		fmt.Sprintf("Wait for status %s, but has %s", statusFailed.String(), handlr.getStatus().String()))
 	assert.Error(t, handlr.err)
 	assert.EqualError(t, handlr.err, "TEST: cannot open deal")
 }
@@ -388,7 +390,7 @@ func TestCreateOrder_CannotWaitForApprove(t *testing.T) {
 	require.True(t, ok)
 
 	assert.Equal(t, statusFailed, handlr.getStatus(),
-		fmt.Sprintf("Wait for status %s, but has %s", statusMap[statusFailed], statusMap[handlr.getStatus()]))
+		fmt.Sprintf("Wait for status %s, but has %s", statusFailed.String(), handlr.getStatus().String()))
 	assert.Error(t, handlr.err)
 }
 
@@ -425,8 +427,8 @@ func TestCreateOrder_LackAllowanceBalance(t *testing.T) {
 	require.True(t, ok)
 
 	assert.Equal(t, statusFailed, handlr.getStatus(),
-		fmt.Sprintf("Wait for status %s, but has %s", statusMap[statusFailed], statusMap[handlr.getStatus()]))
-	assert.Error(t, handlr.err, errProposeNotAccepted)
+		fmt.Sprintf("Wait for status %s, but has %s", statusFailed.String(), handlr.getStatus().String()))
+	assert.EqualError(t, handlr.err, errLackOfBalance.Error())
 }
 
 func TestCreateOrder_LackAllowance(t *testing.T) {
@@ -463,8 +465,8 @@ func TestCreateOrder_LackAllowance(t *testing.T) {
 	require.True(t, ok)
 
 	assert.Equal(t, statusFailed, handlr.getStatus(),
-		fmt.Sprintf("Wait for status %s, but has %s", statusMap[statusFailed], statusMap[handlr.getStatus()]))
-	assert.Error(t, handlr.err, errProposeNotAccepted)
+		fmt.Sprintf("Wait for status %s, but has %s", statusFailed.String(), handlr.getStatus().String()))
+	assert.EqualError(t, handlr.err, errLackOfBalance.Error())
 }
 
 func TestCreateOrder_LackBalance(t *testing.T) {
@@ -502,8 +504,164 @@ func TestCreateOrder_LackBalance(t *testing.T) {
 	require.True(t, ok)
 
 	assert.Equal(t, statusFailed, handlr.getStatus(),
-		fmt.Sprintf("Wait for status %s, but has %s", statusMap[statusFailed], statusMap[handlr.getStatus()]))
-	assert.Error(t, handlr.err, errProposeNotAccepted)
+		fmt.Sprintf("Wait for status %s, but has %s", statusFailed.String(), handlr.getStatus().String()))
+	assert.EqualError(t, handlr.err, errLackOfBalance.Error())
+}
+
+func TestFilterOrdersByPriceAndAllowance(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	opts := getTestRemotes(ctx, ctrl)
+	server, err := newMarketAPI(opts)
+	require.NoError(t, err)
+
+	inner := server.(*marketAPI)
+	ordersFromSearch := []*pb.Order{
+		{PricePerSecond: pb.NewBigIntFromInt(100), Slot: &pb.Slot{Duration: 1}},
+		{PricePerSecond: pb.NewBigIntFromInt(200), Slot: &pb.Slot{Duration: 1}},
+	}
+
+	balance := big.NewInt(999999)
+	allowance := big.NewInt(150)
+	ordersToDeal, err := inner.filterOrdersByPriceAndAllowance(ctx, balance, allowance, ordersFromSearch)
+	require.NoError(t, err)
+	assert.Len(t, ordersToDeal, 1, "order with price = 200 must be filtered")
+
+	balance = big.NewInt(150)
+	allowance = big.NewInt(9999999)
+	ordersToDeal, err = inner.filterOrdersByPriceAndAllowance(ctx, balance, allowance, ordersFromSearch)
+	require.NoError(t, err)
+	assert.Len(t, ordersToDeal, 1, "order with price = 200 must be filtered")
+
+	balance = big.NewInt(99)
+	allowance = big.NewInt(9999999)
+	ordersToDeal, err = inner.filterOrdersByPriceAndAllowance(ctx, balance, allowance, ordersFromSearch)
+	require.EqualError(t, err, errLackOfBalance.Error())
+
+	balance = big.NewInt(999)
+	allowance = big.NewInt(999)
+	ordersToDeal, err = inner.filterOrdersByPriceAndAllowance(ctx, balance, allowance, ordersFromSearch)
+	require.NoError(t, err)
+	assert.Len(t, ordersToDeal, 2, "all orders must be returned")
+}
+
+func TestCreateOrder_NotApprovedAndNotCancelled(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	opts := getTestRemotes(ctx, ctrl)
+
+	eth := blockchain.NewMockBlockchainer(ctrl)
+	eth.EXPECT().BalanceOf(gomock.Any()).AnyTimes().
+		Return(big.NewInt(9999999999), nil)
+	eth.EXPECT().AllowanceOf(gomock.Any(), gomock.Any()).AnyTimes().
+		Return(big.NewInt(9999999999), nil)
+	eth.EXPECT().OpenDealPending(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes().
+		Return(big.NewInt(1), nil)
+	eth.EXPECT().CloseDealPending(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes().
+		Return(errors.New("TEST: cannot close deal"))
+
+	opts.eth = eth
+	opts.hubCreator = func(addr string) (pb.HubClient, io.Closer, error) {
+		hub := NewMockHubClient(ctrl)
+		hub.EXPECT().ProposeDeal(gomock.Any(), gomock.Any()).AnyTimes().Return(&pb.Empty{}, nil)
+		hub.EXPECT().ApproveDeal(gomock.Any(), gomock.Any()).AnyTimes().Return(
+			nil, errors.New("TEST: cannot approve deal"))
+
+		return hub, &mockConn{}, nil
+	}
+
+	server, err := newMarketAPI(opts)
+	require.NoError(t, err)
+
+	inner := server.(*marketAPI)
+	created, err := inner.CreateOrder(ctx, makeOrder())
+	require.NoError(t, err)
+	assert.NotNil(t, created)
+	assert.NotEmpty(t, created.Id)
+
+	// wait for async handler is finished
+	time.Sleep(1 * time.Second)
+	assert.Equal(t, inner.countHandlers(), 1, "Handler must not be removed")
+
+	handlr, ok := inner.getHandler(created.Id)
+	require.True(t, ok)
+
+	assert.Equal(t, statusFailed, handlr.getStatus(),
+		fmt.Sprintf("Wait for status %s, but has %s", statusFailed.String(), handlr.getStatus().String()))
+	assert.EqualError(t, handlr.err, "TEST: cannot close deal")
+}
+
+func TestRestartOrdersProcessing(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	opts := getTestRemotes(ctx, ctrl)
+
+	server, err := newMarketAPI(opts)
+	require.NoError(t, err)
+
+	api := server.(*marketAPI)
+	assert.Equal(t, api.countHandlers(), 0)
+
+	f := api.restartOrdersProcessing()
+
+	err = f()
+	require.NoError(t, err)
+
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, api.countHandlers(), 1)
+	h, ok := api.getHandler("my-order-id")
+	require.True(t, ok)
+
+	assert.Equal(t, h.getStatus(), statusDone)
+}
+
+func TestCancelOrderHandler(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mrk := pb.NewMockMarketClient(ctrl)
+	ord := makeOrder()
+	ord.ByuerID = addr.Hex()
+	ord.Id = "my-order-id"
+
+	mrk.EXPECT().CreateOrder(gomock.Any(), gomock.Any()).AnyTimes().
+		Return(ord, nil)
+	mrk.EXPECT().GetOrderByID(gomock.Any(), gomock.Any()).AnyTimes().
+		Return(ord, nil)
+	mrk.EXPECT().GetOrders(gomock.Any(), gomock.Any()).AnyTimes().
+		Return(&pb.GetOrdersReply{Orders: []*pb.Order{}}, nil)
+	mrk.EXPECT().CancelOrder(gomock.Any(), gomock.Any()).AnyTimes().
+		Return(&pb.Empty{}, nil)
+
+	opts := getTestRemotes(ctx, ctrl)
+	opts.market = mrk
+
+	server, err := newMarketAPI(opts)
+	require.NoError(t, err)
+
+	api := server.(*marketAPI)
+	assert.Equal(t, api.countHandlers(), 0)
+
+	created, err := api.CreateOrder(ctx, makeOrder())
+	require.NoError(t, err)
+	assert.NotNil(t, created)
+	assert.NotEmpty(t, created.Id)
+
+	// wait for async handler is finished
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, api.countHandlers(), 1)
+
+	_, err = api.CancelOrder(ctx, created)
+	require.NoError(t, err)
+
+	assert.Equal(t, api.countHandlers(), 0)
 }
 
 type mockConn struct{}

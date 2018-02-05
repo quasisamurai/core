@@ -17,6 +17,7 @@ import (
 	"github.com/sonm-io/core/insonmnia/hardware"
 	"github.com/sonm-io/core/insonmnia/hardware/cpu"
 	"github.com/sonm-io/core/insonmnia/hardware/gpu"
+	"github.com/sonm-io/core/insonmnia/miner/plugin"
 	pb "github.com/sonm-io/core/proto"
 	"github.com/sonm-io/core/util"
 	"github.com/stretchr/testify/assert"
@@ -53,11 +54,11 @@ func defaultMockCfg(mock *gomock.Controller) *MockConfig {
 	cfg.EXPECT().HubResolveEndpoints().AnyTimes().Return(false)
 	cfg.EXPECT().HubResources().AnyTimes()
 	cfg.EXPECT().Firewall().AnyTimes()
-	cfg.EXPECT().GPU().AnyTimes()
 	cfg.EXPECT().SSH().AnyTimes()
 	cfg.EXPECT().ETH().AnyTimes().Return(&accounts.EthConfig{})
 	cfg.EXPECT().LocatorEndpoint().AnyTimes().Return("127.0.0.1:9090")
 	cfg.EXPECT().PublicIPs().AnyTimes().Return([]string{"192.168.70.17", "46.148.198.133"})
+	cfg.EXPECT().Plugins().AnyTimes().Return(plugin.Config{})
 	return cfg
 }
 
@@ -89,7 +90,6 @@ func TestServerNewExtractsHubEndpoint(t *testing.T) {
 	hw := magicHardware(mock)
 
 	m, err := NewMiner(cfg, WithKey(key), WithLocatorClient(locator), WithOverseer(ovs), WithHardware(hw))
-	cfg.EXPECT().GPU().AnyTimes()
 
 	require.NoError(t, err)
 	assert.NotNil(t, m)
@@ -213,7 +213,7 @@ func TestMinerStart(t *testing.T) {
 
 	require.NotNil(t, m)
 	require.Nil(t, err)
-	reply, err := m.Start(context.Background(), &pb.MinerStartRequest{Id: "test", Resources: &pb.TaskResourceRequirements{}})
+	reply, err := m.Start(context.Background(), &pb.MinerStartRequest{Id: "test", Resources: &pb.TaskResourceRequirements{}, Container: &pb.Container{}})
 	require.NoError(t, err)
 	require.NotNil(t, reply)
 

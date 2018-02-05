@@ -8,6 +8,7 @@ It is generated from these files:
 	bid.proto
 	bigint.proto
 	capabilities.proto
+	container.proto
 	deal.proto
 	hub.proto
 	insonmnia.proto
@@ -16,6 +17,8 @@ It is generated from these files:
 	miner.proto
 	nat.proto
 	node.proto
+	timestamp.proto
+	volume.proto
 
 It has these top-level messages:
 	Geo
@@ -27,6 +30,7 @@ It has these top-level messages:
 	CPUDevice
 	RAMDevice
 	GPUDevice
+	Container
 	Deal
 	ListReply
 	HubStartTaskRequest
@@ -65,7 +69,6 @@ It has these top-level messages:
 	TaskLogsChunk
 	DiscoverHubRequest
 	TaskResourceRequirements
-	Timestamp
 	Chunk
 	Progress
 	AnnounceRequest
@@ -81,13 +84,15 @@ It has these top-level messages:
 	SocketAddr
 	MinerStartReply
 	TaskInfo
-	Route
+	Endpoints
 	MinerStatusMapRequest
 	SaveRequest
 	TaskListRequest
 	DealListRequest
 	DealListReply
 	DealStatusReply
+	Timestamp
+	Volume
 */
 package sonm
 

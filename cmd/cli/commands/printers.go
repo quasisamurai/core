@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/sonm-io/core/insonmnia/node"
 	pb "github.com/sonm-io/core/proto"
+	"github.com/sonm-io/core/util"
 	"github.com/spf13/cobra"
 )
 
@@ -76,11 +77,11 @@ func printNodeTaskStatus(cmd *cobra.Command, tasksMap map[string]*pb.TaskListRep
 	if isSimpleFormat() {
 		for worker, tasks := range tasksMap {
 			if len(tasks.GetTasks()) == 0 {
-				cmd.Printf("Hub \"%s\" has no tasks\r\n", worker)
+				cmd.Printf("Worker \"%s\" has no tasks\r\n", worker)
 				continue
 			}
 
-			cmd.Printf("Hub \"%s\":\r\n", worker)
+			cmd.Printf("Worker \"%s\":\r\n", worker)
 			i := 1
 			for ID, status := range tasks.GetTasks() {
 				up := time.Duration(status.GetUptime())
@@ -266,7 +267,7 @@ func printSearchResults(cmd *cobra.Command, orders []*pb.Order) {
 
 		for i, order := range orders {
 			cmd.Printf("%d) %s %s | price = %s\r\n", i+1,
-				order.OrderType.String(), order.GetId(), order.GetPricePerSecond())
+				order.OrderType.String(), order.GetId(), order.GetPricePerSecond().Unwrap().String())
 		}
 	} else {
 		showJSON(cmd, map[string]interface{}{"orders": orders})
@@ -322,10 +323,10 @@ func printProcessingOrders(cmd *cobra.Command, tasks *pb.GetProcessingReply) {
 
 		for _, handlr := range handlers {
 			t := time.Unix(handlr.Timestamp.Seconds, 0).Format(time.RFC822)
-			s := node.HandlerStatusString(uint8(handlr.Status))
+			status := node.HandlerStatus(handlr.Status).String()
 
 			cmd.Printf("id:     %s start: %s\r\n", handlr.Id, t)
-			cmd.Printf("status: %s (%s)\r\n", s, handlr.Extra)
+			cmd.Printf("status: %s (%s)\r\n", status, handlr.Extra)
 			cmd.Println()
 		}
 
@@ -363,11 +364,13 @@ func printAskList(cmd *cobra.Command, slots *pb.SlotsReply) {
 
 func printVersion(cmd *cobra.Command, v string) {
 	if isSimpleFormat() {
-		cmd.Printf("Version: %s\r\n", v)
+		cmd.Printf("sonmcli %s (%s)\r\n", v, util.GetPlatformName())
 	} else {
-		showJSON(cmd, map[string]string{"version": v})
+		showJSON(cmd, map[string]string{
+			"version":  v,
+			"platform": util.GetPlatformName(),
+		})
 	}
-
 }
 
 func printDealsList(cmd *cobra.Command, deals []*pb.Deal) {

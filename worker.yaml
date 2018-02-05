@@ -4,7 +4,7 @@ hub:
   # Either `resolve_endpoints: true` or `endpoints` should be provided. If `resolve_endpoints`
   # is set to `true`, hub's addresses will be resolved via locator.
   resolve_endpoints: false
-  endpoints: ["127.0.0.1:10002", "127.0.0.1:10002"]
+  endpoints: ["127.0.0.1:15011", "127.0.0.2:15011"]
 
 #  Resources section is available only on Linux
 #  If configured, all tasks will share this pool of resources.
@@ -43,10 +43,9 @@ logging:
 # Ignored if firewall settings are not null.
 # public_ip_addrs: ["46.148.198.134"]
 
-# GPUConfig:
-  # type: "nvidiadocker"
-  # by default nvidia-docker-plugin works on that endpoint
-  # args: { nvidiadockerdriver: "localhost:3476" }
+# Preferred type for GPU tuner, may be "nvidia" or "radeon".
+# Any other value will disable auto GPU tuning.
+GPUConfig: "any"
 
 ethereum:
   # path to keystore
@@ -57,4 +56,17 @@ ethereum:
 # locator service allows nodes to discover each other
 locator:
   # locator gRPC endpoint, required
-  endpoint: "8125721C2413d99a33E351e1F6Bb4e56b6b633FD@127.0.0.1:9090"
+  endpoint: "8125721C2413d99a33E351e1F6Bb4e56b6b633FD@127.0.0.1:15020"
+
+metrics_listen_addr: "127.0.0.1:14001"
+
+#plugins:
+#  socket_dir: /run/docker/plugins
+#
+#  volume:
+#    root: /var/lib/docker-volumes
+#    volumes:
+#      cifs: {}
+#  GPUs:
+#    nvidia: {}
+#    radeon: {}
