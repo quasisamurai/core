@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"encoding/json"
-	"errors"
 	"os"
 	"time"
 
@@ -34,6 +33,7 @@ var (
 	nodeAddressFlag string
 	outputModeFlag  string
 	timeoutFlag     = 60 * time.Second
+	insecureFlag    bool
 
 	// logging flag vars
 	logType       string
@@ -47,18 +47,16 @@ var (
 	cfg        config.Config
 	sessionKey *ecdsa.PrivateKey = nil
 	creds      credentials.TransportCredentials
-
-	// errors
-	errCannotParsePropsFile = errors.New("cannot parse props file")
 )
 
 func init() {
-	rootCmd.PersistentFlags().StringVar(&nodeAddressFlag, "node", "127.0.0.1:15030", "node addr")
+	rootCmd.PersistentFlags().StringVar(&nodeAddressFlag, "node", "localhost:15030", "node endpoint")
 	rootCmd.PersistentFlags().DurationVar(&timeoutFlag, "timeout", 60*time.Second, "Connection timeout")
 	rootCmd.PersistentFlags().StringVar(&outputModeFlag, "out", "", "Output mode: simple or json")
+	rootCmd.PersistentFlags().BoolVar(&insecureFlag, "insecure", false, "Disable TLS for connection")
 
-	rootCmd.AddCommand(hubRootCmd, marketRootCmd, nodeDealsRootCmd, taskRootCmd)
-	rootCmd.AddCommand(loginCmd, approveTokenCmd, getTokenCmd, versionCmd, autoCompleteCmd)
+	rootCmd.AddCommand(workerMgmtCmd, marketRootCmd, nodeDealsRootCmd, taskRootCmd)
+	rootCmd.AddCommand(loginCmd, approveTokenCmd, getTokenCmd, getBalanceCmd, versionCmd, autoCompleteCmd)
 }
 
 // Root configure and return root command
@@ -166,16 +164,34 @@ func loadKeyStoreWrapper(cmd *cobra.Command, _ []string) {
 
 	sessionKey = key
 
-	_, TLSConfig, err := util.NewHitlessCertRotator(context.Background(), sessionKey)
-	if err != nil {
-		showError(cmd, err.Error(), nil)
-		os.Exit(1)
-	}
+	// If an insecure flag is set - we do not require TLS auth.
+	// But we still need to load keys from a store, somewhere keys are used
+	// to sign blockchain transactions, or something like that.
+	if !insecureFlag {
+		_, TLSConfig, err := util.NewHitlessCertRotator(context.Background(), sessionKey)
+		if err != nil {
+			showError(cmd, err.Error(), nil)
+			os.Exit(1)
+		}
 
-	creds = auth.NewWalletAuthenticator(util.NewTLS(TLSConfig), util.PubKeyToAddr(sessionKey.PublicKey))
+		creds = auth.NewWalletAuthenticator(util.NewTLS(TLSConfig), util.PubKeyToAddr(sessionKey.PublicKey))
+	}
+}
+
+// loadKeyStoreIfRequired loads eth keystore if `insecure` flag is not set.
+// this wrapper is required for any command that not require eth keys implicitly
+// but may use TLS to connect to the Node.
+func loadKeyStoreIfRequired(cmd *cobra.Command, _ []string) {
+	if !insecureFlag {
+		loadKeyStoreWrapper(cmd, nil)
+	}
 }
 
 func showJSON(cmd *cobra.Command, s interface{}) {
 	b, _ := json.Marshal(s)
 	cmd.Printf("%s\r\n", b)
+}
+
+func newTimeoutContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), timeoutFlag)
 }

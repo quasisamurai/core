@@ -3,30 +3,56 @@ package xgrpc
 import (
 	"github.com/grpc-ecosystem/go-grpc-middleware/tracing/opentracing"
 	"github.com/opentracing/basictracer-go"
+	"github.com/opentracing/opentracing-go"
 	"github.com/sonm-io/core/insonmnia/auth"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
 
-// NewClient creates new gRPC client connection on given addr and wraps it
-// with given credentials.
-func NewClient(ctx context.Context, addr string, creds credentials.TransportCredentials, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
-	var secureOpt = grpc.WithInsecure()
-	if creds != nil {
-		secureOpt = grpc.WithTransportCredentials(creds)
-	}
-
-	tracer := basictracer.NewWithOptions(basictracer.Options{
+func newTracer() opentracing.Tracer {
+	return basictracer.NewWithOptions(basictracer.Options{
 		ShouldSample:   func(traceID uint64) bool { return true },
 		MaxLogsPerSpan: 100,
 		Recorder:       basictracer.NewInMemoryRecorder(),
 	})
+}
+
+// NewClient creates new gRPC client connection on given addr and wraps it
+// with given credentials (if provided).
+//
+// The address argument can be optionally used as other peer's verification
+// using ETH authentication. To enable this the argument should be in
+// format "ethAddr@Endpoint".
+func NewClient(ctx context.Context, addr string, credentials credentials.TransportCredentials, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
+	authEndpoint, err := auth.NewAddr(addr)
+	if err != nil {
+		return nil, err
+	}
+
+	netAddr, err := authEndpoint.Addr()
+	if err != nil {
+		return nil, err
+	}
+
+	ethAddr, err := authEndpoint.ETH()
+	if err != nil {
+		return newClient(ctx, addr, credentials, opts...)
+	}
+
+	return newClient(ctx, netAddr, auth.NewWalletAuthenticator(credentials, ethAddr), opts...)
+}
+
+func newClient(ctx context.Context, addr string, credentials credentials.TransportCredentials, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
+	var secureOpt = grpc.WithInsecure()
+	if credentials != nil {
+		secureOpt = grpc.WithTransportCredentials(credentials)
+	}
 
 	var extraOpts = append(opts, secureOpt,
 		grpc.WithCompressor(grpc.NewGZIPCompressor()),
 		grpc.WithDecompressor(grpc.NewGZIPDecompressor()),
-		grpc.WithUnaryInterceptor(grpc_opentracing.UnaryClientInterceptor(grpc_opentracing.WithTracer(tracer))),
+		grpc.WithUnaryInterceptor(grpc_opentracing.UnaryClientInterceptor(grpc_opentracing.WithTracer(newTracer()))),
 		grpc.WithStreamInterceptor(grpc_opentracing.StreamClientInterceptor()),
 	)
 	cc, err := grpc.DialContext(ctx, addr, extraOpts...)
@@ -34,13 +60,4 @@ func NewClient(ctx context.Context, addr string, creds credentials.TransportCred
 		return nil, err
 	}
 	return cc, err
-}
-
-func NewWalletAuthenticatedClient(ctx context.Context, creds credentials.TransportCredentials, endpoint string, opts ...grpc.DialOption) (*grpc.ClientConn, error) {
-	authEndpoint, err := auth.NewEndpoint(endpoint)
-	if err != nil {
-		return NewClient(ctx, endpoint, creds, opts...)
-	}
-
-	return NewClient(ctx, authEndpoint.Endpoint, auth.NewWalletAuthenticator(creds, authEndpoint.EthAddress), opts...)
 }

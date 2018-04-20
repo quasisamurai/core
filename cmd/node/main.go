@@ -1,12 +1,12 @@
 package main
 
 import (
-	"crypto/ecdsa"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	log "github.com/noxiouz/zapctx/ctxlog"
-	"github.com/sonm-io/core/accounts"
 	"github.com/sonm-io/core/cmd"
 	"github.com/sonm-io/core/insonmnia/logging"
 	"github.com/sonm-io/core/insonmnia/node"
@@ -32,10 +32,10 @@ func run() {
 		os.Exit(1)
 	}
 
-	logger := logging.BuildLogger(cfg.LogLevel(), true)
+	logger := logging.BuildLogger(cfg.Log.LogLevel())
 	ctx := log.WithLogger(context.Background(), logger)
 
-	key, err := loadKeys(cfg)
+	key, err := cfg.Eth.LoadKey()
 	if err != nil {
 		log.G(ctx).Error("cannot load Ethereum keys", zap.Error(err))
 		os.Exit(1)
@@ -47,26 +47,17 @@ func run() {
 		os.Exit(1)
 	}
 
-	go util.StartPrometheus(ctx, cfg.MetricsListenAddr())
+	go func() {
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
+		<-c
+		n.Close()
+	}()
 
-	log.G(ctx).Error("starting node", zap.String("listen_addr", cfg.ListenAddress()))
+	go util.StartPrometheus(ctx, cfg.MetricsListenAddr)
+
 	if err := n.Serve(); err != nil {
-		log.G(ctx).Error("cannot start node", zap.Error(err))
+		log.G(ctx).Error("node termination", zap.Error(err))
 		os.Exit(1)
 	}
-}
-
-func loadKeys(c node.Config) (*ecdsa.PrivateKey, error) {
-	p := accounts.NewFmtPrinter()
-	ko, err := accounts.DefaultKeyOpener(p, c.KeyStore(), c.PassPhrase())
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = ko.OpenKeystore()
-	if err != nil {
-		return nil, err
-	}
-
-	return ko.GetKey()
 }

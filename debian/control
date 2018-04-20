@@ -2,24 +2,20 @@ Source: sonm-core
 Section: misc
 Priority: optional
 Maintainer: Anton Tyurin <noxiouz@yandex.ru>
-Build-Depends: debhelper (>= 9), dh-systemd, ocl-icd-opencl-dev
+Build-Depends: debhelper (>= 9), dh-systemd, ocl-icd-opencl-dev, bash-completion
 #golang (>= 2:1.7~1ubuntu1)
 Standards-Version: 3.9.8
 Homepage: https://github.com/sonm-io/core
 Vcs-Git: https://github.com/sonm-io/core.git
 Vcs-Browser: https://github.com/sonm-io/core
 
-Package: sonm-hub
-Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}
-Description: Hub daemon for SONM network
- Controls jobs distribution
-
 Package: sonm-worker
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}, libopencl1
+Conflicts: sonm-hub
+Replaces: sonm-hub
 Description: Worker daemon for SONM network
- This daemon starts actual jobs
+ Provides computational resources for SONM network
 
 Package: sonm-cli
 Architecture: any
@@ -27,15 +23,24 @@ Depends: ${shlibs:Depends}, ${misc:Depends}
 Description: CLI for SONM network
  Gonna deprecate this one
 
-Package: sonm-locator
-Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}
-Description: Locator allows to resolve addresses
- This service allows SONM nodes to discover
- each other by their Etherum addr.
-
 Package: sonm-node
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends}
 Description: Node for SONM network
  Local proxy that provides SONM Node API for clients
+
+Package: sonm-rendezvous
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Rendezvous allows to connect two clients
+ Rendezvous penetrating several types of NAT
+ and allows clients to connect with each other without having
+ publicity-available IP-addresses.
+
+Package: sonm-relay
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Relay transports TCP traffic in the userland
+ The Relay server is a tool used to penetrate the NAT
+ in case of over-paranoid network configurations,
+ such as Symmetrical NAT or manual iptables hacks.

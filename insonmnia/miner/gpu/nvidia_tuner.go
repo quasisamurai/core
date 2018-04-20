@@ -4,23 +4,114 @@ package gpu
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
+	"sync"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/go-plugins-helpers/volume"
 	log "github.com/noxiouz/zapctx/ctxlog"
+	"github.com/sonm-io/core/insonmnia/hardware/gpu"
 	"github.com/sonm-io/core/proto"
+	pb "github.com/sonm-io/core/proto"
 	"github.com/sshaman1101/nvidia-docker/nvidia"
 	"go.uber.org/zap"
 )
 
-type nvidiaTuner struct {
-	volumePluginHandler
+type nvidiaDevice struct {
+	// "NVidia 1080 Ti"
+	name string
+	// "/dev/nvidia0"
+	devicePath string
+	// "/dev/dri/card0", "/dev/dri/renderD128"
+	driDevice DRICard
+	// "/dev/nvidiactl", "/dev/nvidia-uvm", "/dev/nvidia-uvm-tools"
+	ctrlDevices []string
+	mem         uint64
 }
 
-func (g *nvidiaTuner) Tune(hostconfig *container.HostConfig) error {
-	return g.tune(hostconfig)
+func (dev *nvidiaDevice) String() string {
+	return fmt.Sprintf("%s (%s)", dev.name, dev.devicePath)
+}
+
+func (dev *nvidiaDevice) ID() GPUID {
+	return GPUID(dev.driDevice.PCIBusID)
+}
+
+// Devices returns all device files that must be bound to container
+func (dev *nvidiaDevice) Devices() []string {
+	return append(append(dev.ctrlDevices, dev.driDevice.Devices...), dev.devicePath)
+}
+
+type nvidiaTuner struct {
+	options  *tunerOptions
+	handler  *volume.Handler
+	listener net.Listener
+
+	m      sync.Mutex
+	devMap map[GPUID]nvidiaDevice
+}
+
+/*
+	Note: card cllecting code into the Tune() method is almost similar to radeon's one
+*/
+
+func (g *nvidiaTuner) Tune(hostconfig *container.HostConfig, ids []GPUID) error {
+	g.m.Lock()
+	defer g.m.Unlock()
+
+	var cardsToBind = make(map[GPUID]nvidiaDevice)
+	for _, id := range ids {
+		card, ok := g.devMap[id]
+		if !ok {
+			return fmt.Errorf("cannot allocate device: unknown id %s", id)
+		}
+
+		// copy cards to the map (instead of slice) preventing us
+		// from binding same card more than once
+		cardsToBind[id] = card
+	}
+
+	for _, card := range cardsToBind {
+		for _, device := range card.Devices() {
+			hostconfig.Devices = append(hostconfig.Devices, container.DeviceMapping{
+				PathOnHost:        device,
+				PathInContainer:   device,
+				CgroupPermissions: "rwm",
+			})
+		}
+	}
+
+	mnt := newVolumeMount(g.options.volumeName(), g.options.libsMountPoint, g.options.VolumeDriverName)
+	hostconfig.Mounts = append(hostconfig.Mounts, mnt)
+
+	return nil
+}
+
+func (g *nvidiaTuner) Devices() []*pb.GPUDevice {
+	g.m.Lock()
+	defer g.m.Unlock()
+
+	var devices []*pb.GPUDevice
+	for _, d := range g.devMap {
+		dev := &pb.GPUDevice{
+			ID:          string(d.ID()),
+			VendorName:  "Nvidia",
+			VendorID:    d.driDevice.VendorID,
+			DeviceName:  d.name,
+			DeviceID:    d.driDevice.DeviceID,
+			MajorNumber: d.driDevice.Major,
+			MinorNumber: d.driDevice.Minor,
+			Memory:      d.mem,
+		}
+
+		dev.FillHashID()
+		devices = append(devices, dev)
+	}
+
+	return devices
 }
 
 func (g *nvidiaTuner) Close() error {
@@ -36,51 +127,71 @@ func newNvidiaTuner(ctx context.Context, opts ...Option) (Tuner, error) {
 		f(options)
 	}
 
-	ovs := nvidiaTuner{}
+	ovs := nvidiaTuner{devMap: make(map[GPUID]nvidiaDevice)}
 	ovs.options = options
 
-	if err := hasGPUWithVendor(sonm.GPUVendorType_NVIDIA); err != nil {
+	// get devices list provided by openCL
+	clDevices, err := gpu.GetGPUDevices()
+	if err != nil {
+		return nil, err
+	}
+
+	// check if there is any device with required type
+	if err := hasGPUWithVendor(sonm.GPUVendorType_NVIDIA, clDevices); err != nil {
 		return nil, err
 	}
 
 	// Detect if we support NVIDIA
 	log.G(ctx).Info("loading NVIDIA unified memory")
-	UVMErr := nvidia.LoadUVM()
-	if UVMErr != nil {
-		log.G(ctx).Warn("failed to load UVM. Seems NVIDIA is not installed on the host", zap.Error(UVMErr))
+	if err := nvidia.LoadUVM(); err != nil {
+		log.G(ctx).Error("failed to load UVM, seems NVIDIA is not installed on the host", zap.Error(err))
+		return nil, err
 	}
 
 	log.G(ctx).Info("loading NVIDIA management library")
-	initErr := nvidia.Init()
-	if initErr == nil {
-		defer func() { nvidia.Shutdown() }()
+	if err := nvidia.Init(); err != nil {
+		log.G(ctx).Error("failed to init NVML", zap.Error(err))
+		return nil, err
 	}
 
-	var nvidiaSupported = initErr == nil && UVMErr == nil
-	if nvidiaSupported {
-		log.G(ctx).Info("NVIDIA GPU supported by the host. Discovering GPU devices")
-		devices, err := nvidia.LookupDevices()
+	defer func() { nvidia.Shutdown() }()
+
+	log.G(ctx).Info("NVIDIA GPU supported by the host, discovering GPU devices")
+	devices, err := nvidia.LookupDevices()
+	if err != nil {
+		log.G(ctx).Error("failed to lookup GPU devices", zap.Error(err))
+		return nil, err
+	}
+
+	ctrlDevices, err := nvidia.GetControlDevicePaths()
+	if err != nil {
+		log.G(ctx).Error("failed to get control devices paths", zap.Error(err))
+		return nil, err
+	}
+
+	for _, d := range devices {
+		card, err := newCardByDevicePath(d.Path)
 		if err != nil {
-			log.G(ctx).Error("failed to lookup GPU devices", zap.Error(err))
 			return nil, err
 		}
-		cdevices, err := nvidia.GetControlDevicePaths()
-		if err != nil {
-			log.G(ctx).Error("failed to get control devices paths", zap.Error(err))
-			return nil, err
-		}
-		ovs.devices = append(ovs.devices, cdevices...)
-		for _, device := range devices {
-			ovs.devices = append(ovs.devices, device.Path)
-		}
-	}
 
-	if _, err := os.Stat("/dev/dri"); err == nil {
-		ovs.devices = append(ovs.devices, "/dev/dri")
-	}
+		// d.Memory.Global is presented in Megabytes
+		memBytes := uint64(*d.Memory.Global) * 1024 * 1024
 
-	if _, err := os.Stat(openCLVendorDir); err == nil {
-		ovs.OpenCLVendorDir = openCLVendorDir
+		dev := nvidiaDevice{
+			name:        *d.Model,
+			devicePath:  d.Path,
+			driDevice:   card,
+			ctrlDevices: ctrlDevices,
+			mem:         memBytes,
+		}
+		ovs.devMap[dev.ID()] = dev
+
+		log.G(ctx).Debug("discovered gpu devices",
+			zap.String("root", dev.String()),
+			zap.Strings("ctrl", dev.ctrlDevices),
+			zap.Strings("dri", card.Devices),
+			zap.Uint64("mem", memBytes))
 	}
 
 	volInfo := []nvidia.VolumeInfo{
@@ -90,47 +201,13 @@ func newNvidiaTuner(ctx context.Context, opts ...Option) (Tuner, error) {
 			MountOptions: "ro",
 			Components: map[string][]string{
 				"binaries": {
-					"nvidia-cuda-mps-control", // Multi process service CLI
-					"nvidia-cuda-mps-server",  // Multi process service server
-					"nvidia-debugdump",        // GPU coredump utility
-					"nvidia-persistenced",     // Persistence mode utility
-					"nvidia-smi",              // System management interface
+					"nvidia-smi", // System management interface
 				},
 				"libraries": {
-					// ----- Compute -----
 					"libnvidia-ml.so",              // Management library
 					"libcuda.so",                   // CUDA driver library
 					"libnvidia-ptxjitcompiler.so",  // PTX-SASS JIT compiler (used by libcuda)
 					"libnvidia-fatbinaryloader.so", // fatbin loader (used by libcuda)
-					"libnvidia-opencl.so",          // NVIDIA OpenCL ICD
-					"libnvidia-compiler.so",        // NVVM-PTX compiler for OpenCL (used by libnvidia-opencl)
-					"libOpenCL.so",                 // OpenCL ICD loader
-
-					// ------ Video ------
-					"libvdpau_nvidia.so",  // NVIDIA VDPAU ICD
-					"libnvidia-encode.so", // Video encoder
-					"libnvcuvid.so",       // Video decoder
-					"libnvidia-fbc.so",    // Framebuffer capture
-					"libnvidia-ifr.so",    // OpenGL framebuffer capture
-
-					// ----- Graphic -----
-					"libGL.so",         // OpenGL/GLX legacy _or_ compatibility wrapper (GLVND)
-					"libGLX.so",        // GLX ICD loader (GLVND)
-					"libOpenGL.so",     // OpenGL ICD loader (GLVND)
-					"libGLESv1_CM.so",  // OpenGL ES v1 common profile legacy _or_ ICD loader (GLVND)
-					"libGLESv2.so",     // OpenGL ES v2 legacy _or_ ICD loader (GLVND)
-					"libEGL.so",        // EGL ICD loader
-					"libGLdispatch.so", // OpenGL dispatch (GLVND) (used by libOpenGL, libEGL and libGLES*)
-
-					"libGLX_nvidia.so",         // OpenGL/GLX ICD (GLVND)
-					"libEGL_nvidia.so",         // EGL ICD (GLVND)
-					"libGLESv2_nvidia.so",      // OpenGL ES v2 ICD (GLVND)
-					"libGLESv1_CM_nvidia.so",   // OpenGL ES v1 common profile ICD (GLVND)
-					"libnvidia-eglcore.so",     // EGL core (used by libGLES* or libGLES*_nvidia and libEGL_nvidia)
-					"libnvidia-egl-wayland.so", // EGL wayland extensions (used by libEGL_nvidia)
-					"libnvidia-glcore.so",      // OpenGL core (used by libGL or libGLX_nvidia)
-					"libnvidia-tls.so",         // Thread local storage (used by libGL or libGLX_nvidia)
-					"libnvidia-glsi.so",        // OpenGL system interaction (used by libEGL_nvidia)
 				},
 			},
 		},
@@ -156,4 +233,24 @@ func newNvidiaTuner(ctx context.Context, opts ...Option) (Tuner, error) {
 	}()
 
 	return &ovs, nil
+}
+
+func newVolumeMount(src, dst, name string) mount.Mount {
+	return mount.Mount{
+		Type:         mount.TypeVolume,
+		Source:       src,
+		Target:       dst,
+		ReadOnly:     true,
+		Consistency:  mount.ConsistencyDefault,
+		BindOptions:  nil,
+		TmpfsOptions: nil,
+		VolumeOptions: &mount.VolumeOptions{
+			NoCopy: false,
+			Labels: map[string]string{},
+			DriverConfig: &mount.Driver{
+				Name:    name,
+				Options: map[string]string{},
+			},
+		},
+	}
 }

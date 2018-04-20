@@ -8,13 +8,13 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/gosuri/uiprogress"
 	"github.com/sonm-io/core/cmd/cli/task_config"
 	"github.com/sonm-io/core/insonmnia/structs"
 	pb "github.com/sonm-io/core/proto"
 	"github.com/sonm-io/core/util"
 	"github.com/spf13/cobra"
-	"golang.org/x/net/context"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -36,6 +36,7 @@ func init() {
 		taskStopCmd,
 		taskPullCmd,
 		taskPushCmd,
+		taskJoinNetworkCmd,
 	)
 }
 
@@ -43,26 +44,29 @@ var taskPullOutput string
 
 var taskRootCmd = &cobra.Command{
 	Use:   "tasks",
-	Short: "Manage tasks",
+	Short: "Tasks management",
 }
 
 var taskListCmd = &cobra.Command{
 	Use:    "list [hub_addr]",
 	Short:  "Show active tasks",
-	PreRun: loadKeyStoreWrapper,
+	PreRun: loadKeyStoreIfRequired,
 	Run: func(cmd *cobra.Command, args []string) {
-		node, err := NewTasksInteractor(nodeAddressFlag, timeoutFlag)
+		ctx, cancel := newTimeoutContext()
+		defer cancel()
+
+		node, err := newTaskClient(ctx)
 		if err != nil {
 			showError(cmd, "Cannot connect to Node", err)
 			os.Exit(1)
 		}
 
-		var hubAddr string
+		var hubID common.Address
 		if len(args) > 0 {
-			hubAddr = args[0]
+			hubID = common.StringToAddress(args[0])
 		}
 
-		list, err := node.List(hubAddr)
+		list, err := node.List(ctx, &pb.EthAddress{Address: hubID.Bytes()})
 		if err != nil {
 			showError(cmd, "Cannot get task list", err)
 			os.Exit(1)
@@ -78,7 +82,10 @@ var taskStartCmd = &cobra.Command{
 	PreRun: loadKeyStoreWrapper,
 	Args:   cobra.MinimumNArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
-		node, err := NewTasksInteractor(nodeAddressFlag, timeoutFlag)
+		ctx, cancel := newTimeoutContext()
+		defer cancel()
+
+		node, err := newTaskClient(ctx)
 		if err != nil {
 			showError(cmd, "Cannot connect to Node", err)
 			os.Exit(1)
@@ -106,7 +113,17 @@ var taskStartCmd = &cobra.Command{
 			}
 		}
 
-		var req = &pb.HubStartTaskRequest{
+		networks := make([]*pb.NetworkSpec, 0)
+		for _, net := range taskDef.Networks() {
+			networks = append(networks, &pb.NetworkSpec{
+				Type:    net.Type,
+				Options: net.Options,
+				Subnet:  net.Subnet,
+				Addr:    net.Addr,
+			})
+		}
+
+		var req = &pb.StartTaskRequest{
 			Deal: deal,
 			Container: &pb.Container{
 				Image:         taskDef.GetImageName(),
@@ -117,10 +134,11 @@ var taskStartCmd = &cobra.Command{
 				CommitOnStop:  taskDef.GetCommitOnStop(),
 				Volumes:       volumes,
 				Mounts:        taskDef.Mounts(),
+				Networks:      networks,
 			},
 		}
 
-		reply, err := node.Start(req)
+		reply, err := node.Start(ctx, req)
 		if err != nil {
 			showError(cmd, "Cannot start task", err)
 			os.Exit(1)
@@ -133,10 +151,13 @@ var taskStartCmd = &cobra.Command{
 var taskStatusCmd = &cobra.Command{
 	Use:    "status <hub_addr> <task_id>",
 	Short:  "Show task status",
-	PreRun: loadKeyStoreWrapper,
 	Args:   cobra.MinimumNArgs(2),
+	PreRun: loadKeyStoreIfRequired,
 	Run: func(cmd *cobra.Command, args []string) {
-		node, err := NewTasksInteractor(nodeAddressFlag, timeoutFlag)
+		ctx, cancel := newTimeoutContext()
+		defer cancel()
+
+		node, err := newTaskClient(ctx)
 		if err != nil {
 			showError(cmd, "Cannot connect to Node", err)
 			os.Exit(1)
@@ -144,7 +165,12 @@ var taskStatusCmd = &cobra.Command{
 
 		hubAddr := args[0]
 		taskID := args[1]
-		status, err := node.Status(taskID, hubAddr)
+		req := &pb.TaskID{
+			Id:      taskID,
+			HubAddr: hubAddr,
+		}
+
+		status, err := node.Status(ctx, req)
 		if err != nil {
 			showError(cmd, "Cannot get task status", err)
 			os.Exit(1)
@@ -154,13 +180,50 @@ var taskStatusCmd = &cobra.Command{
 	},
 }
 
+var taskJoinNetworkCmd = &cobra.Command{
+	Use:    "join <hub_addr> <task_id> <network_id>",
+	Short:  "Provide network specs for joining to specified task's specific network",
+	Args:   cobra.MinimumNArgs(3),
+	PreRun: loadKeyStoreIfRequired,
+	Run: func(cmd *cobra.Command, args []string) {
+		ctx, cancel := newTimeoutContext()
+		defer cancel()
+
+		node, err := newTaskClient(ctx)
+		if err != nil {
+			showError(cmd, "Cannot connect to Node", err)
+			os.Exit(1)
+		}
+
+		hubAddr := args[0]
+		taskID := args[1]
+		netID := args[2]
+		spec, err := node.JoinNetwork(ctx, &pb.JoinNetworkRequest{
+			TaskID: &pb.TaskID{
+				Id:      taskID,
+				HubAddr: hubAddr,
+			},
+			NetworkID: netID,
+		})
+		if err != nil {
+			showError(cmd, "Cannot get task status", err)
+			os.Exit(1)
+		}
+
+		printNetworkSpec(cmd, spec)
+	},
+}
+
 var taskLogsCmd = &cobra.Command{
 	Use:    "logs <hub_addr> <task_id>",
 	Short:  "Retrieve task logs",
-	PreRun: loadKeyStoreWrapper,
 	Args:   cobra.MinimumNArgs(2),
+	PreRun: loadKeyStoreIfRequired,
 	Run: func(cmd *cobra.Command, args []string) {
-		node, err := NewTasksInteractor(nodeAddressFlag, timeoutFlag)
+		ctx, cancel := newTimeoutContext()
+		defer cancel()
+
+		node, err := newTaskClient(ctx)
 		if err != nil {
 			showError(cmd, "Cannot connect to Node", err)
 			os.Exit(1)
@@ -178,7 +241,7 @@ var taskLogsCmd = &cobra.Command{
 			Details:       details,
 		}
 
-		logClient, err := node.Logs(context.Background(), req)
+		logClient, err := node.Logs(ctx, req)
 		if err != nil {
 			showError(cmd, "Cannot get task logs", err)
 			os.Exit(1)
@@ -205,10 +268,13 @@ var taskLogsCmd = &cobra.Command{
 var taskStopCmd = &cobra.Command{
 	Use:    "stop <hub_addr> <task_id>",
 	Short:  "Stop task",
-	PreRun: loadKeyStoreWrapper,
 	Args:   cobra.MinimumNArgs(2),
+	PreRun: loadKeyStoreIfRequired,
 	Run: func(cmd *cobra.Command, args []string) {
-		node, err := NewTasksInteractor(nodeAddressFlag, timeoutFlag)
+		ctx, cancel := newTimeoutContext()
+		defer cancel()
+
+		node, err := newTaskClient(ctx)
 		if err != nil {
 			showError(cmd, "Cannot connect to Node", err)
 			os.Exit(1)
@@ -216,7 +282,11 @@ var taskStopCmd = &cobra.Command{
 
 		hubAddr := args[0]
 		taskID := args[1]
-		_, err = node.Stop(taskID, hubAddr)
+		req := &pb.TaskID{
+			Id:      taskID,
+			HubAddr: hubAddr,
+		}
+		_, err = node.Stop(ctx, req)
 		if err != nil {
 			showError(cmd, "Cannot stop status", err)
 			os.Exit(1)
@@ -229,8 +299,8 @@ var taskStopCmd = &cobra.Command{
 var taskPullCmd = &cobra.Command{
 	Use:    "pull <deal_id> <task_id>",
 	Short:  "Pull committed image from the completed task.",
-	PreRun: loadKeyStoreWrapper,
 	Args:   cobra.MinimumNArgs(2),
+	PreRun: loadKeyStoreIfRequired,
 	Run: func(cmd *cobra.Command, args []string) {
 		dealID := args[0]
 		taskID := args[1]
@@ -252,13 +322,21 @@ var taskPullCmd = &cobra.Command{
 
 		w := bufio.NewWriter(wr)
 
-		node, err := NewTasksInteractor(nodeAddressFlag, timeoutFlag)
+		ctx, cancel := newTimeoutContext()
+		defer cancel()
+
+		node, err := newTaskClient(ctx)
 		if err != nil {
 			showError(cmd, "Cannot connect to Node", err)
 			os.Exit(1)
 		}
 
-		client, err := node.ImagePull(dealID, taskID)
+		req := &pb.PullTaskRequest{
+			DealId: dealID,
+			TaskId: taskID,
+		}
+
+		client, err := node.PullTask(ctx, req)
 		if err != nil {
 			showError(cmd, "Cannot create image pull client", err)
 			os.Exit(1)
@@ -329,8 +407,8 @@ var taskPullCmd = &cobra.Command{
 var taskPushCmd = &cobra.Command{
 	Use:    "push <deal_id> <archive_path>",
 	Short:  "Push an image from the filesystem",
-	PreRun: loadKeyStoreWrapper,
 	Args:   cobra.MinimumNArgs(2),
+	PreRun: loadKeyStoreIfRequired,
 	Run: func(cmd *cobra.Command, args []string) {
 		dealID := args[0]
 		path := args[1]
@@ -349,18 +427,21 @@ var taskPushCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		node, err := NewTasksInteractor(nodeAddressFlag, timeoutFlag)
+		ctx, cancel := newTimeoutContext()
+		defer cancel()
+
+		node, err := newTaskClient(ctx)
 		if err != nil {
 			showError(cmd, "Cannot connect to Node", err)
 			os.Exit(1)
 		}
 
-		ctx := metadata.NewOutgoingContext(context.Background(), metadata.New(map[string]string{
+		ctx = metadata.NewOutgoingContext(ctx, metadata.New(map[string]string{
 			"deal": dealID,
 			"size": strconv.FormatInt(fileInfo.Size(), 10),
 		}))
 
-		client, err := node.ImagePush(ctx)
+		client, err := node.PushTask(ctx)
 		if err != nil {
 			showError(cmd, "Cannot create push task client", err)
 			os.Exit(1)

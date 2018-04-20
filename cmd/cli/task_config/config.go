@@ -3,11 +3,8 @@ package task_config
 import (
 	b64 "encoding/base64"
 	"encoding/json"
-	"fmt"
 	"os"
-	"strings"
 
-	ds "github.com/c2h5oh/datasize"
 	"github.com/docker/docker/api/types"
 	"github.com/jinzhu/configor"
 )
@@ -15,7 +12,6 @@ import (
 // TaskConfig describe how to start task (docker image) on Miner
 type TaskConfig interface {
 	GetImageName() string
-	GetEntrypoint() string
 	GetSSHKey() string
 	GetEnvVars() map[string]string
 	GetCommitOnStop() bool
@@ -23,15 +19,9 @@ type TaskConfig interface {
 	GetRegistryName() string
 	GetRegistryAuth() string
 
-	GetMinersPreferred() []string
-	GetCPUCount() uint64
-	GetRAMCount() uint64
-	GetCPUType() string
-	GetGPURequirement() bool
-	GetGPUType() string
-
 	Volumes() map[string]volume
 	Mounts() []string
+	Networks() []network
 }
 
 type container struct {
@@ -42,11 +32,19 @@ type container struct {
 	CommitOnStop bool              `yaml:"commit_on_stop" required:"false"`
 	Volumes      map[string]volume
 	Mounts       []string
+	Networks     []network
 }
 
 type volume struct {
 	Type    string            `yaml:"type" required:"true"`
 	Options map[string]string `yaml:"options" required:"false"`
+}
+
+type network struct {
+	Type    string            `yaml:"type,omitempty"`
+	Options map[string]string `yaml:"options,omitempty"`
+	Subnet  string            `yaml:"subnet,omitempty"`
+	Addr    string            `yaml:"addr,omitempty"`
 }
 
 type registry struct {
@@ -55,46 +53,17 @@ type registry struct {
 	Password string `yaml:"password" required:"false"`
 }
 
-type resources struct {
-	CPU     uint64 `yaml:"CPU" required:"true" default:"1"`
-	CPUType string `yaml:"CPU_type" required:"false" default:"any"`
-	UseGPU  bool   `yaml:"GPU" required:"false" default:"false"`
-	GPUType string `yaml:"GPU_type" required:"false" default:"any"`
-	RAM     string `yaml:"RAM" required:"true"`
-}
-
 type task struct {
-	Miners    []string  `yaml:"miners" required:"false"`
 	Container container `yaml:"container,flow" required:"true"`
-	Resources resources `yaml:"resources,flow" required:"true"`
 	Registry  *registry `yaml:"registry,flow" required:"false"`
 }
 
 type YamlConfig struct {
 	Task task `yaml:"task" required:"true"`
-	// RamCount this field is temporary exportable because of bug in configor
-	// https://github.com/jinzhu/configor/issues/23
-	// maybe it will be better to fork configor and fix this bug
-	RamCount uint64 `yaml:"-"`
-}
-
-// parseValues check task config internal consistency
-func (yc *YamlConfig) parseValues() error {
-	var ram ds.ByteSize
-	err := ram.UnmarshalText([]byte(strings.ToLower(yc.Task.Resources.RAM)))
-	if err != nil {
-		return fmt.Errorf("cannot parse ram: %s", err)
-	}
-	yc.RamCount = ram.Bytes()
-	return nil
 }
 
 func (yc *YamlConfig) GetImageName() string {
 	return yc.Task.Container.Name
-}
-
-func (yc *YamlConfig) GetEntrypoint() string {
-	return yc.Task.Container.Entrypoint
 }
 
 func (yc *YamlConfig) GetSSHKey() string {
@@ -129,36 +98,16 @@ func (yc *YamlConfig) GetRegistryAuth() string {
 	return ""
 }
 
-func (yc *YamlConfig) GetMinersPreferred() []string {
-	return yc.Task.Miners
-}
-
-func (yc *YamlConfig) GetCPUCount() uint64 {
-	return yc.Task.Resources.CPU
-}
-
-func (yc *YamlConfig) GetRAMCount() uint64 {
-	return yc.RamCount
-}
-
-func (yc *YamlConfig) GetCPUType() string {
-	return yc.Task.Resources.CPUType
-}
-
-func (yc *YamlConfig) GetGPUType() string {
-	return yc.Task.Resources.GPUType
-}
-
-func (yc *YamlConfig) GetGPURequirement() bool {
-	return yc.Task.Resources.UseGPU
-}
-
 func (yc *YamlConfig) Volumes() map[string]volume {
 	return yc.Task.Container.Volumes
 }
 
 func (yc *YamlConfig) Mounts() []string {
 	return yc.Task.Container.Mounts
+}
+
+func (yc *YamlConfig) Networks() []network {
+	return yc.Task.Container.Networks
 }
 
 func LoadConfig(path string) (TaskConfig, error) {
@@ -168,11 +117,6 @@ func LoadConfig(path string) (TaskConfig, error) {
 
 	conf := &YamlConfig{}
 	err := configor.Load(conf, path)
-	if err != nil {
-		return nil, err
-	}
-
-	err = conf.parseValues()
 	if err != nil {
 		return nil, err
 	}

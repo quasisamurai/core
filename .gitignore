@@ -3,6 +3,7 @@
 *.a
 *.so
 *.uuid
+target/
 
 # Folders
 _obj
@@ -33,10 +34,13 @@ sonmcli_win32.exe
 sonmworker
 sonmbootnode
 sonmmarketplace
-sonmlocator
 sonmnode
+autocli
+sonmrendezvous
+lsgpu
+target/
+release/
 .idea/
-
 
 fusrodah/examples/bootnode/main
 fusrodah/examples/fusrodah/main
@@ -57,3 +61,5 @@ blockchain/package-lock.json
 
 # truffle stores build artifacts here
 blockchain/build
+
+vendor/github.com/golang/mock/mockgen/mockgen

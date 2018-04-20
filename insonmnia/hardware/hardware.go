@@ -1,104 +1,108 @@
 package hardware
 
 import (
-	"github.com/shirou/gopsutil/mem"
+	"fmt"
+	"net"
+
+	"github.com/cnf/structhash"
 	"github.com/sonm-io/core/insonmnia/hardware/cpu"
-	"github.com/sonm-io/core/insonmnia/hardware/gpu"
+	"github.com/sonm-io/core/insonmnia/hardware/ram"
+	"github.com/sonm-io/core/proto"
+	"github.com/sonm-io/core/util"
 )
 
-// Hardware accumulates the finest hardware information about system the miner
+// Hardware accumulates the finest hardware information about system the worker
 // is running on.
 type Hardware struct {
-	CPU    []cpu.Device
-	Memory *mem.VirtualMemoryStat
-	GPU    []gpu.Device
+	CPU     *sonm.CPU     `json:"cpu"`
+	GPU     []*sonm.GPU   `json:"gpu"`
+	RAM     *sonm.RAM     `json:"ram"`
+	Network *sonm.Network `json:"network"`
+	Storage *sonm.Storage `json:"storage"`
+}
+
+// NewHardware returns initial hardware capabilities for Worker's host.
+// Parts of the struct may be filled later by HW-plugins.
+func NewHardware() (*Hardware, error) {
+	var err error
+	hw := &Hardware{
+		CPU:     &sonm.CPU{Benchmarks: make(map[uint64]*sonm.Benchmark)},
+		RAM:     &sonm.RAM{Benchmarks: make(map[uint64]*sonm.Benchmark)},
+		Network: &sonm.Network{Benchmarks: make(map[uint64]*sonm.Benchmark)},
+		Storage: &sonm.Storage{Benchmarks: make(map[uint64]*sonm.Benchmark)},
+	}
+
+	hw.CPU.Device, err = cpu.GetCPUDevice()
+	if err != nil {
+		return nil, err
+	}
+
+	hw.RAM.Device, err = ram.NewRAMDevice()
+	if err != nil {
+		return nil, err
+	}
+
+	return hw, nil
 }
 
 // LogicalCPUCount returns the number of logical CPUs in the system.
+//
+// Method is deprecated.
 func (h *Hardware) LogicalCPUCount() int {
-	count := 0
-	for _, c := range h.CPU {
-		count += int(c.Cores)
-	}
-
-	return count
+	return int(h.CPU.Device.Cores)
 }
 
-// TotalMemory returns the total number of bytes.
-func (h *Hardware) TotalMemory() uint64 {
-	return h.Memory.Total
+func (h *Hardware) Hash() string {
+	return h.devicesMap().Hash()
 }
 
-// HasGPU returns true if a system has GPU on the board.
-func (h *Hardware) HasGPU() bool {
-	return len(h.GPU) > 0
-}
-
-type HardwareInfo interface {
-	// CPU returns information about system CPU.
-	//
-	// This includes vendor name, model name, number of cores, cache info,
-	// instruction flags and many others to be able to identify and to properly
-	// account the CPU.
-	CPU() ([]cpu.Device, error)
-
-	// Memory returns information about system memory.
-	//
-	// This includes total physical  memory, available memory and many others,
-	// expressed in bytes.
-	Memory() (*mem.VirtualMemoryStat, error)
-
-	// GPU returns information about GPU devices on the machine.
-	GPU() ([]gpu.Device, error)
-
-	// Info returns all described above hardware statistics.
-	Info() (*Hardware, error)
-}
-
-type hardwareInfo struct{}
-
-func (*hardwareInfo) CPU() ([]cpu.Device, error) {
-	return cpu.GetCPUDevices()
-}
-
-func (h *hardwareInfo) Memory() (*mem.VirtualMemoryStat, error) {
-	return mem.VirtualMemory()
-}
-
-func (*hardwareInfo) GPU() ([]gpu.Device, error) {
-	return gpu.GetGPUDevices()
-}
-
-func (h *hardwareInfo) Info() (*Hardware, error) {
-	cpuInfo, err := h.CPU()
-	if err != nil {
-		return nil, err
-	}
-
-	memory, err := h.Memory()
-	if err != nil {
-		return nil, err
-	}
-
-	gpuInfo, err := h.GPU()
-	if err != nil {
-		if err != gpu.ErrUnsupportedPlatform {
-			return nil, err
+func (h *Hardware) SetNetworkIncoming(IPs []string) {
+	for _, ip := range IPs {
+		if !util.IsPrivateIP(net.ParseIP(ip)) {
+			h.Network.Incoming = true
+			break
 		}
-
-		gpuInfo = make([]gpu.Device, 0)
 	}
-
-	hardware := &Hardware{
-		CPU:    cpuInfo,
-		Memory: memory,
-		GPU:    gpuInfo,
-	}
-
-	return hardware, nil
 }
 
-// New constructs a new hardware info collector.
-func New() HardwareInfo {
-	return &hardwareInfo{}
+type hashableRAM struct {
+	Available uint64 `json:"available"`
+}
+
+type hashableNetworkCapabilities struct {
+	Overlay  bool `json:"overlay"`
+	Incoming bool `json:"incoming"`
+}
+
+// DeviceMapping maps hardware capabilities to device description, hashing-friendly
+type DeviceMapping struct {
+	CPU         *sonm.CPUDevice             `json:"cpu"`
+	GPU         []*sonm.GPUDevice           `json:"gpu"`
+	RAM         hashableRAM                 `json:"ram"`
+	Network     *sonm.NetworkDevice         `json:"network"`
+	Storage     *sonm.StorageDevice         `json:"storage"`
+	NetworkCaps hashableNetworkCapabilities `json:"network_caps"`
+}
+
+func (dm *DeviceMapping) Hash() string {
+	return fmt.Sprintf("%x", structhash.Md5(dm, 1))
+}
+
+func (h *Hardware) devicesMap() *DeviceMapping {
+	var GPUs []*sonm.GPUDevice
+	for _, dev := range h.GPU {
+		GPUs = append(GPUs, dev.Device)
+	}
+
+	return &DeviceMapping{
+		CPU:     h.CPU.Device,
+		GPU:     GPUs,
+		RAM:     hashableRAM{Available: h.RAM.Device.Available},
+		Network: h.Network.Device,
+		Storage: h.Storage.Device,
+		NetworkCaps: hashableNetworkCapabilities{
+			Incoming: h.Network.Incoming,
+			Overlay:  h.Network.Overlay,
+		},
+	}
 }

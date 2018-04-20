@@ -3,17 +3,16 @@ package commands
 import (
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"time"
 
-	"sort"
-
-	ds "github.com/c2h5oh/datasize"
 	"github.com/docker/go-connections/nat"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/sonm-io/core/insonmnia/node"
 	pb "github.com/sonm-io/core/proto"
 	"github.com/sonm-io/core/util"
+	"github.com/sonm-io/core/util/datasize"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v2"
 )
 
 func printTaskStatus(cmd *cobra.Command, id string, taskStatus *pb.TaskStatusReply) {
@@ -33,7 +32,7 @@ func printTaskStatus(cmd *cobra.Command, id string, taskStatus *pb.TaskStatusRep
 		if taskStatus.GetUsage() != nil {
 			cmd.Println("  Resources:")
 			cmd.Printf("    CPU: %d\r\n", taskStatus.Usage.GetCpu().GetTotal())
-			cmd.Printf("    MEM: %s\r\n", ds.ByteSize(taskStatus.Usage.GetMemory().GetMaxUsage()).HR())
+			cmd.Printf("    MEM: %s\r\n", datasize.NewByteSize(taskStatus.Usage.GetMemory().GetMaxUsage()).HumanReadable())
 			if taskStatus.GetUsage().GetNetwork() != nil {
 				cmd.Printf("    NET:\r\n")
 				for i, net := range taskStatus.GetUsage().GetNetwork() {
@@ -73,175 +72,96 @@ func printTaskStatus(cmd *cobra.Command, id string, taskStatus *pb.TaskStatusRep
 	}
 }
 
-func printNodeTaskStatus(cmd *cobra.Command, tasksMap map[string]*pb.TaskListReply_TaskInfo) {
-	if isSimpleFormat() {
-		for worker, tasks := range tasksMap {
-			if len(tasks.GetTasks()) == 0 {
-				cmd.Printf("Worker \"%s\" has no tasks\r\n", worker)
-				continue
-			}
+func printNetworkSpec(cmd *cobra.Command, spec *pb.NetworkSpec) {
+	out, err := yaml.Marshal(spec)
+	if err != nil {
+		cmd.Printf("%s", err)
+	} else {
+		cmd.Print(out)
+	}
+}
 
-			cmd.Printf("Worker \"%s\":\r\n", worker)
+func printNodeTaskStatus(cmd *cobra.Command, tasksMap map[string]*pb.TaskStatusReply) {
+	if isSimpleFormat() {
+		for id, task := range tasksMap {
 			i := 1
-			for ID, status := range tasks.GetTasks() {
-				up := time.Duration(status.GetUptime())
-				cmd.Printf("  %d) %s \r\n     %s  %s (up: %v)\r\n",
-					i, ID, status.Status.String(), status.ImageName, up.String())
-				i++
-			}
+			up := time.Duration(task.GetUptime())
+
+			cmd.Printf("  %d) %s \r\n     %s  %s (up: %v)\r\n",
+				i, id, task.GetImageName(), task.GetStatus().String(), up.String())
+			i++
 		}
 	} else {
 		showJSON(cmd, tasksMap)
 	}
 }
 
-func printWorkerList(cmd *cobra.Command, lr *pb.ListReply) {
-	if isSimpleFormat() {
-		if len(lr.Info) == 0 {
-			cmd.Printf("No workers connected\r\n")
-			return
-		}
-
-		for addr, meta := range lr.Info {
-			cmd.Printf("Worker: %s", addr)
-
-			taskCount := len(meta.Values)
-			if taskCount == 0 {
-				cmd.Printf("\t\tIdle\r\n")
-			} else {
-				cmd.Printf("\t\t%d active task(s)\r\n", taskCount)
-			}
-		}
-	} else {
-		showJSON(cmd, lr)
-	}
-}
-
-func printCpuInfo(cmd *cobra.Command, cap *pb.Capabilities) {
-	for i, cpu := range cap.Cpu {
-		cmd.Printf("    CPU%d: %d x %s\r\n", i, cpu.GetCores(), cpu.GetModelName())
-	}
-}
-
-func printGpuInfo(cmd *cobra.Command, cap *pb.Capabilities) {
-	if len(cap.Gpu) > 0 {
-		for i, gpu := range cap.Gpu {
-			cmd.Printf("    GPU%d: %s %s\r\n", i, gpu.VendorName, gpu.Name)
-		}
-	} else {
-		cmd.Println("    GPU: None")
-	}
-}
-
-func printMemInfo(cmd *cobra.Command, cap *pb.Capabilities) {
-	cmd.Println("    RAM:")
-	cmd.Printf("      Total: %s\r\n", ds.ByteSize(cap.Mem.GetTotal()).HR())
-	cmd.Printf("      Used:  %s\r\n", ds.ByteSize(cap.Mem.GetUsed()).HR())
-}
-
-func printWorkerStatus(cmd *cobra.Command, workerID string, metrics *pb.InfoReply) {
-	if isSimpleFormat() {
-		cmd.Printf("Worker \"%s\":\r\n", workerID)
-
-		if metrics.Capabilities != nil {
-			cmd.Println("  Hardware:")
-			printCpuInfo(cmd, metrics.Capabilities)
-			printGpuInfo(cmd, metrics.Capabilities)
-			printMemInfo(cmd, metrics.Capabilities)
-		}
-
-		if len(metrics.GetUsage()) == 0 {
-			cmd.Println("  No active tasks")
-		} else {
-			cmd.Println("  Tasks:")
-			i := 1
-			for task := range metrics.Usage {
-				cmd.Printf("    %d) %s\r\n", i, task)
-				i++
-			}
-		}
-	} else {
-		showJSON(cmd, metrics)
-	}
-}
-
 func printHubStatus(cmd *cobra.Command, stat *pb.HubStatusReply) {
 	if isSimpleFormat() {
-		cmd.Printf("Connected workers: %d\r\n", stat.MinerCount)
-		cmd.Printf("Uptime:            %s\r\n", (time.Second * time.Duration(stat.Uptime)).String())
-		cmd.Printf("Version:           %s %s\r\n", stat.Version, stat.Platform)
-		cmd.Printf("Eth address:       %s\r\n", stat.EthAddr)
+		cmd.Printf("Uptime:             %s\r\n", (time.Second * time.Duration(stat.GetUptime())).String())
+		cmd.Printf("Version:            %s %s\r\n", stat.GetVersion(), stat.GetPlatform())
+		cmd.Printf("Eth address:        %s\r\n", stat.GetEthAddr())
+		cmd.Printf("Task count:         %d\r\n", stat.GetTaskCount())
+		cmd.Printf("DWH status:         %s\r\n", stat.GetDWHStatus())
+		cmd.Printf("Rendezvous status:  %s\r\n", stat.GetRendezvousStatus())
 	} else {
 		showJSON(cmd, stat)
 	}
 }
 
-func printDeviceList(cmd *cobra.Command, devices *pb.DevicesReply) {
+func printBenchmarkGroup(cmd *cobra.Command, benchmarks map[uint64]*pb.Benchmark) {
+	cmd.Println("  Benchmarks:")
+	for _, bn := range benchmarks {
+		cmd.Printf("    %s: %v\r\n", bn.Code, bn.Result)
+	}
+	cmd.Println()
+}
+
+func printDeviceList(cmd *cobra.Command, dev *pb.DevicesReply) {
 	if isSimpleFormat() {
-		CPUs := devices.GetCPUs()
-		GPUs := devices.GetGPUs()
+		cpu := dev.GetCPU().GetDevice()
+		cmd.Printf("CPU: %d cores at %d sockets\r\n", cpu.GetCores(), cpu.GetSockets())
+		printBenchmarkGroup(cmd, dev.GetCPU().GetBenchmarks())
 
-		if len(CPUs) == 0 && len(GPUs) == 0 {
-			cmd.Printf("No devices detected.\r\n")
-			return
-		}
+		ram := datasize.NewByteSize(dev.GetRAM().GetDevice().GetAvailable()).HumanReadable()
+		cmd.Printf("RAM: %s\r\n", ram)
+		printBenchmarkGroup(cmd, dev.GetRAM().GetBenchmarks())
 
-		if len(CPUs) > 0 {
-			cmd.Printf("CPUs:\r\n")
-			for id, cpu := range CPUs {
-				cmd.Printf(" %s: %s\r\n", id, cpu.Device.ModelName)
-			}
-		} else {
-			cmd.Printf("No CPUs detected.\r\n")
-		}
-
+		GPUs := dev.GetGPUs()
 		if len(GPUs) > 0 {
 			cmd.Printf("GPUs:\r\n")
-			for id, gpu := range GPUs {
-				cmd.Printf(" %s: %s\r\n", id, gpu.Device.Name)
+			for i, gpu := range GPUs {
+				cmd.Printf("  index=%d: %s\r\n", i, gpu.Device.GetDeviceName())
+				printBenchmarkGroup(cmd, gpu.Benchmarks)
 			}
-		} else {
-			cmd.Printf("No GPUs detected.\r\n")
 		}
+
+		netIn := datasize.NewBitRate(dev.GetNetwork().GetDevice().GetBandwidthIn()).HumanReadable()
+		netOut := datasize.NewBitRate(dev.GetNetwork().GetDevice().GetBandwidthOut()).HumanReadable()
+		cmd.Println("Network:")
+		cmd.Printf("  Incoming: %v\r\n", dev.GetNetwork().GetIncoming())
+		cmd.Printf("  Overlay:  %v\r\n", dev.GetNetwork().GetOverlay())
+		cmd.Printf("  In:       %s\r\n", netIn)
+		cmd.Printf("  Out:      %s\r\n", netOut)
+		printBenchmarkGroup(cmd, dev.GetNetwork().GetBenchmarks())
+
+		storageAvailable := datasize.NewByteSize(dev.GetStorage().GetDevice().GetBytesAvailable()).HumanReadable()
+		cmd.Println("Storage:")
+		cmd.Printf("  Volume: %s\r\n", storageAvailable)
+		printBenchmarkGroup(cmd, dev.GetStorage().GetBenchmarks())
 	} else {
-		showJSON(cmd, devices)
-	}
-}
-
-func printDevicesProps(cmd *cobra.Command, props map[string]float64) {
-	if isSimpleFormat() {
-		if len(props) == 0 {
-			cmd.Printf("No properties configured.\r\n")
-			return
-		}
-
-		for k, v := range props {
-			cmd.Printf("%s = %f\r\n", k, v)
-		}
-	} else {
-		showJSON(cmd, props)
-	}
-}
-
-func printWorkerAclList(cmd *cobra.Command, list *pb.GetRegisteredWorkersReply) {
-	if isSimpleFormat() {
-		for i, id := range list.GetIds() {
-			cmd.Printf("%d) %s\r\n", i+1, id.GetId())
-		}
-
-	} else {
-		showJSON(cmd, list)
+		showJSON(cmd, dev)
 	}
 }
 
 func printTransactionInfo(cmd *cobra.Command, tx *types.Transaction) {
 	if isSimpleFormat() {
 		cmd.Printf("Hash:      %s\r\n", tx.Hash().String())
-		cmd.Printf("Value:     %d\r\n", tx.Value().Uint64())
+		cmd.Printf("Value:     %s\r\n", tx.Value().String())
 		cmd.Printf("To:        %s\r\n", tx.To().String())
-		cmd.Printf("Cost:      %d\r\n", tx.Cost().Uint64())
-		cmd.Printf("Gas:       %d\r\n", tx.Gas().Uint64())
-		cmd.Printf("Gas price: %d\r\n", tx.GasPrice().Uint64())
+		cmd.Printf("Cost:      %s\r\n", tx.Cost().String())
+		cmd.Printf("Gas:       %d\r\n", tx.Gas())
+		cmd.Printf("Gas price: %s\r\n", tx.GasPrice().String())
 	} else {
 		showJSON(cmd, convertTransactionInfo(tx))
 	}
@@ -250,15 +170,15 @@ func printTransactionInfo(cmd *cobra.Command, tx *types.Transaction) {
 func convertTransactionInfo(tx *types.Transaction) map[string]interface{} {
 	return map[string]interface{}{
 		"hash":      tx.Hash().String(),
-		"value":     tx.Value().Uint64(),
+		"value":     tx.Value().String(),
 		"to":        tx.To().String(),
-		"cost":      tx.Cost().Uint64(),
-		"gas":       tx.Gas().Uint64(),
-		"gas_price": tx.GasPrice().Uint64(),
+		"cost":      tx.Cost().String(),
+		"gas":       tx.Gas(),
+		"gas_price": tx.GasPrice().String(),
 	}
 }
 
-func printSearchResults(cmd *cobra.Command, orders []*pb.Order) {
+func printSearchResults(cmd *cobra.Command, orders []*pb.MarketOrder) {
 	if isSimpleFormat() {
 		if len(orders) == 0 {
 			cmd.Printf("No matching orders found")
@@ -267,95 +187,40 @@ func printSearchResults(cmd *cobra.Command, orders []*pb.Order) {
 
 		for i, order := range orders {
 			cmd.Printf("%d) %s %s | price = %s\r\n", i+1,
-				order.OrderType.String(), order.GetId(), order.GetPricePerSecond().Unwrap().String())
+				order.OrderType.String(), order.GetId(), order.GetPrice().ToPriceString())
 		}
 	} else {
 		showJSON(cmd, map[string]interface{}{"orders": orders})
 	}
 }
 
-func printOrderDetails(cmd *cobra.Command, order *pb.Order) {
+func printOrderDetails(cmd *cobra.Command, order *pb.MarketOrder) {
 	if isSimpleFormat() {
 		cmd.Printf("ID:             %s\r\n", order.Id)
 		cmd.Printf("Type:           %s\r\n", order.OrderType.String())
-		cmd.Printf("Price:          %s\r\n", order.PricePerSecond.Unwrap().String())
+		cmd.Printf("Price:          %s\r\n", order.GetPrice().ToPriceString())
 
-		cmd.Printf("SupplierID:     %s\r\n", order.SupplierID)
-		cmd.Printf("BuyerID:        %s\r\n", order.ByuerID)
+		cmd.Printf("AuthorID:     %s\r\n", order.GetAuthorID())
+		cmd.Printf("CounterpartyID:        %s\r\n", order.GetCounterpartyID())
 
-		printOrderResources(cmd, order.Slot.Resources)
+		// todo: find a way to print resources as they presented into MarketOrder struct.
 	} else {
 		showJSON(cmd, order)
 	}
 }
 
-func printOrderResources(cmd *cobra.Command, rs *pb.Resources) {
-	cmd.Printf("Resources:\r\n")
-	cmd.Printf("  CPU:     %d\r\n", rs.CpuCores)
-	cmd.Printf("  GPU:     %s\r\n", rs.GpuCount.String())
-	cmd.Printf("  RAM:     %s\r\n", ds.ByteSize(rs.RamBytes).HR())
-	cmd.Printf("  Storage: %s\r\n", ds.ByteSize(rs.Storage).HR())
-	cmd.Printf("  Network: %s\r\n", rs.NetworkType.String())
-	cmd.Printf("    In:   %s\r\n", ds.ByteSize(rs.NetTrafficIn).HR())
-	cmd.Printf("    Out:  %s\r\n", ds.ByteSize(rs.NetTrafficOut).HR())
-}
-
-type handlerByTime []*pb.GetProcessingReply_ProcessedOrder
-
-func (h handlerByTime) Len() int           { return len(h) }
-func (h handlerByTime) Less(i, j int) bool { return h[i].Timestamp.Seconds < h[j].Timestamp.Seconds }
-func (h handlerByTime) Swap(i, j int)      { *h[i], *h[j] = *h[j], *h[i] }
-
-func printProcessingOrders(cmd *cobra.Command, tasks *pb.GetProcessingReply) {
+func printAskList(cmd *cobra.Command, slots *pb.AskPlansReply) {
 	if isSimpleFormat() {
-		if len(tasks.GetOrders()) == 0 {
-			cmd.Printf("No processing orders\r\n")
-			return
-		}
-
-		// transform map to the slice, then order the slice
-		handlers := make([]*pb.GetProcessingReply_ProcessedOrder, 0, len(tasks.GetOrders()))
-		for _, handlr := range tasks.GetOrders() {
-			handlers = append(handlers, handlr)
-		}
-
-		sort.Sort(handlerByTime(handlers))
-
-		for _, handlr := range handlers {
-			t := time.Unix(handlr.Timestamp.Seconds, 0).Format(time.RFC822)
-			status := node.HandlerStatus(handlr.Status).String()
-
-			cmd.Printf("id:     %s start: %s\r\n", handlr.Id, t)
-			cmd.Printf("status: %s (%s)\r\n", status, handlr.Extra)
-			cmd.Println()
-		}
-
-	} else {
-		showJSON(cmd, tasks)
-	}
-}
-
-func printAskList(cmd *cobra.Command, slots *pb.SlotsReply) {
-	if isSimpleFormat() {
-		slots := slots.GetSlots()
-		if len(slots) == 0 {
+		plans := slots.GetAskPlans()
+		if len(plans) == 0 {
 			cmd.Printf("No Ask Order configured\r\n")
 			return
 		}
-
-		for id, slot := range slots {
-			cmd.Printf(" ID:  %s\r\n", id)
-			cmd.Printf(" CPU: %d Cores\r\n", slot.Resources.CpuCores)
-			cmd.Printf(" GPU: %d Devices\r\n", slot.Resources.GpuCount)
-			cmd.Printf(" RAM: %s\r\n", ds.ByteSize(slot.Resources.RamBytes).HR())
-			cmd.Printf(" Net: %s\r\n", slot.Resources.NetworkType.String())
-			cmd.Printf("     %s IN\r\n", ds.ByteSize(slot.Resources.NetTrafficIn).HR())
-			cmd.Printf("     %s OUT\r\n", ds.ByteSize(slot.Resources.NetTrafficOut).HR())
-
-			if slot.Geo != nil && slot.Geo.City != "" && slot.Geo.Country != "" {
-				cmd.Printf(" Geo: %s, %s\r\n", slot.Geo.City, slot.Geo.Country)
-			}
-			cmd.Println("")
+		out, err := yaml.Marshal(plans)
+		if err != nil {
+			showError(cmd, "could not marshall ask plans", err)
+		} else {
+			cmd.Println(string(out))
 		}
 	} else {
 		showJSON(cmd, slots)
@@ -373,7 +238,7 @@ func printVersion(cmd *cobra.Command, v string) {
 	}
 }
 
-func printDealsList(cmd *cobra.Command, deals []*pb.Deal) {
+func printDealsList(cmd *cobra.Command, deals []*pb.MarketDeal) {
 	if isSimpleFormat() {
 		if len(deals) == 0 {
 			cmd.Println("No deals found")
@@ -390,26 +255,29 @@ func printDealsList(cmd *cobra.Command, deals []*pb.Deal) {
 
 }
 
-func printDealInfo(cmd *cobra.Command, deal *pb.Deal) {
+func printDealInfo(cmd *cobra.Command, deal *pb.MarketDeal) {
 	if isSimpleFormat() {
-		start := time.Unix(deal.GetStartTime().GetSeconds(), int64(deal.GetStartTime().GetNanos()))
-		end := time.Unix(deal.GetEndTime().GetSeconds(), int64(deal.GetEndTime().GetNanos()))
+		start := deal.StartTime.Unix()
+		end := deal.EndTime.Unix()
+
+		ppsBig := pb.NewBigInt(nil)
+		dealDuration := end.Sub(start)
+		if dealDuration > 0 {
+			durationBig := big.NewInt(int64(dealDuration.Seconds()))
+			pps := big.NewInt(0).Div(deal.GetPrice().Unwrap(), durationBig)
+			ppsBig = pb.NewBigInt(pps)
+		}
 
 		cmd.Printf("ID:       %s\r\n", deal.GetId())
-		cmd.Printf("Price:    %s\r\n", deal.GetPrice().Unwrap().String())
 		cmd.Printf("Status:   %s\r\n", deal.GetStatus())
-		cmd.Printf("Buyer:    %s\r\n", deal.GetBuyerID())
+		cmd.Printf("Duraton:  %s\r\n", dealDuration.String())
+		cmd.Printf("Price:    %s (%s SNM/sec)\r\n", deal.GetPrice().ToPriceString(), ppsBig.ToPriceString())
+		cmd.Printf("Consumer: %s\r\n", deal.GetConsumerID())
 		cmd.Printf("Supplier: %s\r\n", deal.GetSupplierID())
 		cmd.Printf("Start at: %s\r\n", start.Format(time.RFC3339))
 		cmd.Printf("End at:   %s\r\n", end.Format(time.RFC3339))
 	} else {
 		showJSON(cmd, deal)
-	}
-}
-
-func printDealTasksShort(cmd *cobra.Command, tasks map[string]*pb.TaskStatusReply) {
-	for id, info := range tasks {
-		cmd.Printf("%s ID: %s | image \"%s\"\r\n", info.GetStatus(), id, info.GetImageName())
 	}
 }
 
@@ -421,41 +289,42 @@ func printID(cmd *cobra.Command, id string) {
 	}
 }
 
-func printTaskStart(cmd *cobra.Command, start *pb.HubStartTaskReply) {
+func printTaskStart(cmd *cobra.Command, start *pb.StartTaskReply) {
 	if isSimpleFormat() {
 		cmd.Printf("Task ID:      %s\r\n", start.Id)
 		cmd.Printf("Hub Address:  %s\r\n", start.HubAddr)
 		for _, end := range start.GetEndpoint() {
 			cmd.Printf("  Endpoint:    %s\r\n", end)
 		}
+		for _, end := range start.GetNetworkIDs() {
+			cmd.Printf("  Network:    %s\r\n", end)
+		}
 	} else {
 		showJSON(cmd, start)
 	}
 }
 
-func printDealDetails(cmd *cobra.Command, d *pb.DealStatusReply) {
+func printDealDetails(cmd *cobra.Command, deals *pb.DealInfoReply) {
 	if !isSimpleFormat() {
-		showJSON(cmd, d)
+		showJSON(cmd, deals)
+		return
+	} else {
+		out, err := yaml.Marshal(deals)
+		if err != nil {
+			showError(cmd, "could not marshall ask plans", err)
+		} else {
+			cmd.Println(string(out))
+		}
+	}
+}
+
+func printBalanceInfo(cmd *cobra.Command, value *big.Int) {
+	s := pb.NewBigInt(value).ToPriceString()
+
+	if !isSimpleFormat() {
+		showJSON(cmd, map[string]string{"balance": s})
 		return
 	}
 
-	if d.GetDeal() != nil {
-		cmd.Printf("Deal info:\r\n")
-		printDealInfo(cmd, d.GetDeal())
-	}
-
-	if d.GetInfo().GetOrder() != nil {
-		cmd.Printf("\r\n")
-		printOrderResources(cmd, d.GetInfo().GetOrder().GetSlot().GetResources())
-	}
-
-	if d.GetInfo().GetRunning() != nil && len(d.GetInfo().GetRunning().GetStatuses()) > 0 {
-		cmd.Printf("\r\nRunning tasks:\r\n")
-		printDealTasksShort(cmd, d.GetInfo().GetRunning().GetStatuses())
-	}
-
-	if d.GetInfo().GetCompleted() != nil && len(d.GetInfo().GetCompleted().GetStatuses()) > 0 {
-		cmd.Printf("\r\nCompleted tasks:\r\n")
-		printDealTasksShort(cmd, d.GetInfo().GetCompleted().GetStatuses())
-	}
+	cmd.Printf("Balance is %s SNM\r\n", s)
 }

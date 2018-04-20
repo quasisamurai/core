@@ -1,0 +1,49 @@
+# Local Node settings
+node:
+  # Node's port to listen for client connection
+  bind_port: 15030
+
+# NAT punching settings.
+npp:
+  # Rendezvous settings.
+  rendezvous:
+    # Known rendezvous endpoints.
+    #
+    # Must be in ETHAddress@Host:Port format.
+    endpoints:
+      - 0x8125721C2413d99a33E351e1F6Bb4e56b6b633FD@127.0.0.1:14099
+  # Relay settings.
+  relay:
+    # Known relay endpoints.
+    #
+    # The format is Host:Port.
+    # Can be omitted, meaning that relaying is disabled.
+    endpoints:
+      - 127.0.0.1:12240
+
+# Marketplace service settings
+market:
+  # marketplace gRPC endpoint
+  # required
+  endpoint: "8125721C2413d99a33E351e1F6Bb4e56b6b633FD@127.0.0.1:15021"
+
+# Logging settings.
+log:
+  # The desired logging level.
+  # Allowed values are "debug", "info", "warn", "error", "panic" and "fatal"
+  level: debug
+
+# Settings for Ethereum keys
+ethereum:
+  # path to keystore
+  key_store: "./keys"
+  # passphrase for keystore
+  pass_phrase: "any"
+
+# Hub management settings.
+# Set this if you have your own Hub and want to manage it.
+hub:
+  # endpoint is Hub's monitoring gRPC endpoint for client connections.
+  endpoint: "127.0.0.1:15010"
+
+metrics_listen_addr: "127.0.0.1:14003"

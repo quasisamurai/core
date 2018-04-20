@@ -12,6 +12,7 @@ import (
 
 	"github.com/sonm-io/core/insonmnia/miner/plugin"
 	"github.com/sonm-io/core/insonmnia/miner/volume"
+	"github.com/sonm-io/core/insonmnia/structs"
 	"go.uber.org/zap"
 
 	"github.com/docker/docker/api/types"
@@ -21,6 +22,7 @@ import (
 	"github.com/docker/go-connections/nat"
 	"github.com/gliderlabs/ssh"
 	log "github.com/noxiouz/zapctx/ctxlog"
+	"github.com/sonm-io/core/insonmnia/miner/gpu"
 	"github.com/sonm-io/core/insonmnia/resource"
 	pb "github.com/sonm-io/core/proto"
 )
@@ -41,10 +43,12 @@ type Description struct {
 	DealId        string
 	CommitOnStop  bool
 
-	GPURequired bool
+	GPUDevices []gpu.GPUID
 
 	volumes map[string]*pb.Volume
 	mounts  []volume.Mount
+
+	networks []structs.Network
 }
 
 func (d *Description) ID() string {
@@ -59,8 +63,16 @@ func (d *Description) Mounts(source string) []volume.Mount {
 	return d.mounts
 }
 
-func (d *Description) GPU() bool {
-	return d.GPURequired
+func (d *Description) IsGPURequired() bool {
+	return len(d.GPUDevices) > 0
+}
+
+func (d *Description) GpuDeviceIDs() []gpu.GPUID {
+	return d.GPUDevices
+}
+
+func (d *Description) Networks() []structs.Network {
+	return d.networks
 }
 
 func (d *Description) FormatEnv() []string {
@@ -83,6 +95,7 @@ type ContainerInfo struct {
 	PublicKey    ssh.PublicKey
 	Cgroup       string
 	CgroupParent string
+	NetworkIDs   []string
 }
 
 // ContainerMetrics are metrics collected from Docker about running containers
@@ -264,20 +277,19 @@ func (o *overseer) handleStreamingEvents(ctx context.Context, sinceUnix int64, f
 					s <- pb.TaskStatusReply_BROKEN
 					close(s)
 				}
-				if c.description.CommitOnStop {
-					go func() {
+				go func() {
+					if c.description.CommitOnStop {
 						log.G(ctx).Info("trying to upload container")
 						err := c.upload()
 						if err != nil {
 							log.G(ctx).Error("failed to commit container", zap.String("id", id), zap.Error(err))
 						}
-
-						if err := c.Cleanup(); err != nil {
-							log.G(ctx).Error("failed to clean up container", zap.String("id", id), zap.Error(err))
-						}
-						c.cancel()
-					}()
-				}
+					}
+					if err := c.Cleanup(); err != nil {
+						log.G(ctx).Error("failed to clean up container", zap.String("id", id), zap.Error(err))
+					}
+					c.cancel()
+				}()
 			default:
 				log.G(ctx).Warn("received unknown event", zap.String("status", message.Status))
 			}
@@ -426,13 +438,9 @@ func (o *overseer) Spool(ctx context.Context, d Description) error {
 }
 
 func (o *overseer) Start(ctx context.Context, description Description) (status chan pb.TaskStatusReply_Status, cinfo ContainerInfo, err error) {
-	// TODO: do we really need this check in that place?
-	// TODO: maybe will be better to check somewhere into the "newContainer()" method?
-	if description.GPURequired {
-		if !o.supportGPU() {
-			err = fmt.Errorf("GPU required but not supported or disabled")
-			return
-		}
+	if description.IsGPURequired() && !o.supportGPU() {
+		err = fmt.Errorf("GPU required but not supported or disabled")
+		return
 	}
 
 	// TODO: Well, we should refactor those dozens of arguments.
@@ -471,8 +479,13 @@ func (o *overseer) Start(ctx context.Context, description Description) (status c
 	}
 
 	var gpuCount = 0
-	if description.GPURequired {
+	if description.IsGPURequired() {
 		gpuCount = -1
+	}
+
+	var networkIDs []string
+	for k := range cjson.NetworkSettings.Networks {
+		networkIDs = append(networkIDs, k)
 	}
 
 	cinfo = ContainerInfo{
@@ -482,6 +495,7 @@ func (o *overseer) Start(ctx context.Context, description Description) (status c
 		Resources:    resource.NewResources(cpuCount, description.Resources.Memory, gpuCount),
 		Cgroup:       string(cjson.HostConfig.Cgroup),
 		CgroupParent: string(cjson.HostConfig.CgroupParent),
+		NetworkIDs:   networkIDs,
 	}
 
 	return status, cinfo, nil

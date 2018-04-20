@@ -1,54 +1,15 @@
 package hardware
 
 import (
-	"github.com/shirou/gopsutil/mem"
-	"github.com/sonm-io/core/insonmnia/hardware/cpu"
-	"github.com/sonm-io/core/insonmnia/hardware/gpu"
 	"github.com/sonm-io/core/proto"
 )
 
-func (h *Hardware) IntoProto() *sonm.Capabilities {
-	return &sonm.Capabilities{
-		Cpu: cpu.MarshalDevices(h.CPU),
-		Mem: MemoryIntoProto(h.Memory),
-		Gpu: gpu.MarshalDevices(h.GPU),
+func (h *Hardware) IntoProto() *sonm.DevicesReply {
+	return &sonm.DevicesReply{
+		CPU:     h.CPU,
+		GPUs:    h.GPU,
+		RAM:     h.RAM,
+		Network: h.Network,
+		Storage: h.Storage,
 	}
-}
-
-func MemoryIntoProto(m *mem.VirtualMemoryStat) *sonm.RAMDevice {
-	return &sonm.RAMDevice{
-		Total: m.Total,
-		Used:  m.Used,
-	}
-}
-
-func MemoryFromProto(m *sonm.RAMDevice) (*mem.VirtualMemoryStat, error) {
-	return &mem.VirtualMemoryStat{
-		Total: m.Total,
-	}, nil
-}
-
-func HardwareFromProto(cap *sonm.Capabilities) (*Hardware, error) {
-	c, err := cpu.UnmarshalDevices(cap.Cpu)
-	if err != nil {
-		return nil, err
-	}
-
-	m, err := MemoryFromProto(cap.Mem)
-	if err != nil {
-		return nil, err
-	}
-
-	g, err := gpu.UnmarshalDevices(cap.Gpu)
-	if err != nil {
-		return nil, err
-	}
-
-	h := &Hardware{
-		CPU:    c,
-		Memory: m,
-		GPU:    g,
-	}
-
-	return h, nil
 }

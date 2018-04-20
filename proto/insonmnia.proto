@@ -1,5 +1,6 @@
 syntax = "proto3";
 
+import "bigint.proto";
 import "capabilities.proto";
 import "timestamp.proto";
 
@@ -16,22 +17,6 @@ message TaskID {
     string id = 1;
     // HubID is ID of hub on which task if running
     string hubAddr = 2;
-}
-
-enum NetworkType {
-    NO_NETWORK = 0;
-    OUTBOUND = 1;
-    INCOMING = 2;
-}
-
-enum GPUCount {
-    NO_GPU = 0;
-    SINGLE_GPU = 1;
-    MULTIPLE_GPU = 2;
-}
-
-message PingReply {
-    string status = 1;
 }
 
 message CPUUsage {
@@ -57,12 +42,6 @@ message ResourceUsage {
     CPUUsage cpu = 1;
     MemoryUsage memory = 2;
     map<string, NetworkUsage> network = 3;
-}
-
-message InfoReply {
-    map<string, ResourceUsage> usage = 1;
-    string name = 2;
-    Capabilities capabilities = 3;
 }
 
 message TaskStatusReply {
@@ -131,17 +110,11 @@ message TaskLogsChunk {
     bytes data = 1;
 }
 
-message DiscoverHubRequest {
-    string endpoint = 1;
-}
-
 message TaskResourceRequirements {
     // CPUCores specifies the number of CPU cores required.
     uint64 CPUCores = 1;
     // MaxMemory specifies the maximum memory in bytes required.
     int64 maxMemory = 2;
-    // GPUCount Describes whether a task requires GPU support.
-    GPUCount GPUSupport = 3;
 }
 
 message Chunk {
@@ -150,4 +123,24 @@ message Chunk {
 
 message Progress {
     int64 size = 1;
+}
+
+message Duration {
+    int64 nanoseconds = 1;
+}
+
+message EthAddress {
+    bytes address = 1;
+}
+
+message DataSize {
+    uint64 bytes = 1;
+}
+
+message DataSizeRate {
+    uint64 bitsPerSecond = 1;
+}
+
+message Price {
+    BigInt perSecond = 1;
 }

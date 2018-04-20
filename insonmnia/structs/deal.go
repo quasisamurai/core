@@ -2,26 +2,25 @@ package structs
 
 import (
 	"github.com/sonm-io/core/proto"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
-type DealRequest struct {
-	*sonm.DealRequest
+type DealID string
+
+func (id DealID) String() string {
+	return string(id)
 }
 
-func NewDealRequest(deal *sonm.DealRequest) (*DealRequest, error) {
-	if deal.GetBidId() == "" {
-		return nil, status.Errorf(codes.InvalidArgument, "bid_id is required")
-	}
+type DealMeta struct {
+	Deal     *sonm.MarketDeal
+	BidOrder *sonm.MarketOrder
+	AskOrder *sonm.MarketOrder
+	Tasks    []*TaskInfo
+}
 
-	if deal.GetAskId() == "" {
-		return nil, status.Errorf(codes.InvalidArgument, "ask_id is required")
+func NewDealMeta(d *sonm.MarketDeal) *DealMeta {
+	m := &DealMeta{
+		Deal:  d,
+		Tasks: make([]*TaskInfo, 0),
 	}
-
-	if deal.GetSpecHash() == "" {
-		return nil, status.Errorf(codes.InvalidArgument, "specification hash is required")
-	}
-
-	return &DealRequest{deal}, nil
+	return m
 }

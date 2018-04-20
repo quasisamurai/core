@@ -1,5 +1,5 @@
 #!/usr/bin/env make
-VER = v0.3
+VER = v0.3.3
 BUILD = $(shell git rev-parse --short HEAD)
 FULL_VER = $(VER)-$(BUILD)
 
@@ -14,11 +14,20 @@ endif
 
 INSTALLDIR=${GOPATH}/bin/
 
-MINER=sonmworker
-HUB=sonmhub
-CLI=sonmcli
-LOCATOR=sonmlocator
-LOCAL_NODE=sonmnode
+
+TARGETDIR=target
+ARCH := $(shell uname -m)
+OS := $(shell uname -s | tr '[:upper:]' '[:lower:]')
+OS_ARCH := $(OS)_$(ARCH)
+
+WORKER=${TARGETDIR}/sonmworker_$(OS_ARCH)
+CLI=${TARGETDIR}/sonmcli_$(OS_ARCH)
+LOCAL_NODE=${TARGETDIR}/sonmnode_$(OS_ARCH)
+AUTOCLI=${TARGETDIR}/autocli_$(OS_ARCH)
+DWH=${TARGETDIR}/sonmdwh_$(OS_ARCH)
+RENDEZVOUS=${TARGETDIR}/sonmrendezvous_$(OS_ARCH)
+RELAY=${TARGETDIR}/sonmrelay_$(OS_ARCH)
+LSGPU=${TARGETDIR}/lsgpu_$(OS_ARCH)
 
 TAGS=nocgo
 
@@ -29,15 +38,16 @@ ifeq ($(GPU_SUPPORT),true)
     NV_CGO=vendor/github.com/sshaman1101/nvidia-docker/build
     CGO_LDFLAGS=-L$(shell pwd)/${NV_CGO}/lib
     CGO_CFLAGS=-I$(shell pwd)/${NV_CGO}/include
+    CGO_LDFLAGS_ALLOW='-Wl,--unresolved-symbols=ignore-in-object-files'
 endif
 
-UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Linux)
-SED=sed -i 's/github\.com\/sonm-io\/core\/vendor\///g' insonmnia/node/hub_mock.go
+
+ifeq ($(OS),linux)
+SED=sed -i 's/github\.com\/sonm-io\/core\/vendor\///g' insonmnia/dealer/hub_mock.go
 endif
 
-ifeq ($(UNAME_S),Darwin)
-SED=sed -i "" 's/github\.com\/sonm-io\/core\/vendor\///g' insonmnia/node/hub_mock.go
+ifeq ($(OS),darwin)
+SED=sed -i "" 's/github\.com\/sonm-io\/core\/vendor\///g' insonmnia/dealer/hub_mock.go
 endif
 
 LDFLAGS = -X main.appVersion=$(FULL_VER)
@@ -46,17 +56,23 @@ LDFLAGS = -X main.appVersion=$(FULL_VER)
 
 all: mock vet fmt build test
 
-build/locator:
+build/worker:
 	@echo "+ $@"
-	${GO} build -tags "$(TAGS)" -ldflags "-s $(LDFLAGS)" -o ${LOCATOR} ${GOCMD}/locator
+	CGO_LDFLAGS_ALLOW=${CGO_LDFLAGS_ALLOW} CGO_LDFLAGS=${CGO_LDFLAGS} CGO_CFLAGS=${CGO_CFLAGS} ${GO} build -tags "$(TAGS) $(GPU_TAGS)" -ldflags "-s $(LDFLAGS)" -o ${WORKER} ${GOCMD}/worker
 
-build/miner:
+build/dwh:
 	@echo "+ $@"
-	CGO_LDFLAGS=${CGO_LDFLAGS} CGO_CFLAGS=${CGO_CFLAGS} ${GO} build -tags "$(TAGS) $(GPU_TAGS)" -ldflags "-s $(LDFLAGS)" -o ${MINER} ${GOCMD}/miner
+	${GO} build -tags "$(TAGS)" -ldflags "-s $(LDFLAGS)" -o ${DWH} ${GOCMD}/dwh
 
-build/hub:
+build/rv:
 	@echo "+ $@"
-	${GO} build -tags "$(TAGS)" -ldflags "-s $(LDFLAGS)" -o ${HUB} ${GOCMD}/hub
+	${GO} build -tags "$(TAGS)" -o ${RENDEZVOUS} ${GOCMD}/rv
+
+build/rendezvous: build/rv
+
+build/relay:
+	@echo "+ $@"
+	${GO} build -tags "$(TAGS)" -o ${RELAY} ${GOCMD}/relay
 
 build/cli:
 	@echo "+ $@"
@@ -66,6 +82,10 @@ build/node:
 	@echo "+ $@"
 	${GO} build -tags "$(TAGS)" -ldflags "-s $(LDFLAGS)" -o ${LOCAL_NODE} ${GOCMD}/node
 
+build/lsgpu:
+	@echo "+ $@"
+	${GO} build -tags "$(TAGS)" -ldflags "-s $(LDFLAGS)" -o ${LSGPU} ${GOCMD}/lsgpu
+
 build/cli_win32:
 	@echo "+ $@"
 	GOOS=windows GOARCH=386 ${GO} build -tags "$(TAGS)" -ldflags "-s $(LDFLAGS).win32" -o ${CLI}_win32.exe ${GOCMD}/cli
@@ -74,17 +94,21 @@ build/node_win32:
 	@echo "+ $@"
 	GOOS=windows GOARCH=386 ${GO} build -tags "$(TAGS)" -ldflags "-s $(LDFLAGS).win32" -o ${LOCAL_NODE}_win32.exe ${GOCMD}/node
 
+build/autocli:
+	@echo "+ $@"
+	${GO} build -tags "$(TAGS)" -ldflags "-s $(LDFLAGS)" -o ${AUTOCLI} ${GOCMD}/autocli
 
-build/insomnia: build/hub build/miner build/cli build/node
 
-build/aux: build/locator
+build/insomnia: build/worker build/cli build/node
+
+build/aux: build/relay build/rv build/dwh
 
 build: build/insomnia build/aux
 
 install: all
 	@echo "+ $@"
 	mkdir -p ${INSTALLDIR}
-	cp ${MINER} ${HUB} ${CLI} ${LOCATOR} ${LOCAL_NODE} ${INSTALLDIR}
+	cp ${WORKER} ${CLI} ${LOCAL_NODE} ${INSTALLDIR}
 
 vet:
 	@echo "+ $@"
@@ -102,38 +126,31 @@ test: mock
 grpc:
 	@echo "+ $@"
 	@if ! which protoc > /dev/null; then echo "protoc protobuf compiler required for build"; exit 1; fi;
-	@if ! which protoc-gen-go > /dev/null; then echo "protoc-gen-go protobuf  plugin required for build.\nRun \`go get -u github.com/golang/protobuf/protoc-gen-go\`"; exit 1; fi;
-	@protoc -I proto proto/*.proto --go_out=plugins=grpc:proto/
+	@if ! which protoc-gen-grpccmd > /dev/null; then echo "protoc-gen-grpccmd protobuf plugin required for build.\nRun \`go get -u github.com/sshaman1101/grpccmd/cmd/protoc-gen-grpccmd\`"; exit 1; fi;
+	@protoc -I proto proto/*.proto --grpccmd_out=proto/
 
-mock:
-	@echo "+ $@"
-	@if ! which mockgen > /dev/null; then \
-	echo "mockgen is required."; \
-	echo "Run \`go get github.com/golang/mock/gomock\`"; \
-	echo "\`go get github.com/golang/mock/mockgen\`"; \
-	echo "and add your go bin directory to PATH"; exit 1; fi;
+build_mockgen:
+	cd ./vendor/github.com/golang/mock/mockgen/ && go install
+
+mock: build_mockgen
 	mockgen -package miner -destination insonmnia/miner/overseer_mock.go -source insonmnia/miner/overseer.go
-	mockgen -package miner -destination insonmnia/miner/config_mock.go -source insonmnia/miner/config.go
-	mockgen -package hardware -destination insonmnia/hardware/hardware_mock.go -source insonmnia/hardware/hardware.go
-	mockgen -package commands -destination cmd/cli/commands/interactor_mock.go  -source cmd/cli/commands/interactor.go
 	mockgen -package task_config -destination cmd/cli/task_config/config_mock.go  -source cmd/cli/task_config/config.go
 	mockgen -package accounts -destination accounts/keys_mock.go  -source accounts/keys.go
+	mockgen -package benchmarks -destination insonmnia/benchmarks/benchmarks_mock.go  -source insonmnia/benchmarks/benchmarks.go
 	mockgen -package blockchain -destination blockchain/api_mock.go  -source blockchain/api.go
-	mockgen -package sonm -destination proto/locator_mock.go  -source proto/locator.pb.go
 	mockgen -package sonm -destination proto/marketplace_mock.go  -source proto/marketplace.pb.go
-	mockgen -package hub -destination insonmnia/hub/cluster_mock.go  -source insonmnia/hub/cluster.go
 	mockgen -package config -destination cmd/cli/config/config_mock.go  -source cmd/cli/config/config.go \
-		-aux_files accounts=accounts/keys.go
-	mockgen -package node -destination insonmnia/node/config_mock.go -source insonmnia/node/config.go \
-		-aux_files accounts=accounts/keys.go
-	mockgen -imports "context=golang.org/x/net/context" -package node -destination insonmnia/node/hub_mock.go \
+		-aux_files accounts=accounts/keys.go,logging=insonmnia/logging/logging.go
+	mockgen -package dealer -destination insonmnia/dealer/hub_mock.go \
 		"github.com/sonm-io/core/proto" HubClient && ${SED}
 
 clean:
-	rm -f ${MINER} ${HUB} ${CLI}
+	rm -f ${WORKER} ${CLI} ${LOCAL_NODE} ${AUTOCLI} ${RENDEZVOUS}
+	find . -name "*_mock.go" | xargs rm -f
 
 deb:
-	debuild --no-lintian --preserve-env -uc -us -i -I
+	debuild --no-lintian --preserve-env -uc -us -i -I -b
+	debuild clean
 
 coverage:
 	.ci/coverage.sh

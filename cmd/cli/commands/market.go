@@ -3,8 +3,6 @@ package commands
 import (
 	"os"
 
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/sonm-io/core/insonmnia/structs"
 	pb "github.com/sonm-io/core/proto"
 	"github.com/spf13/cobra"
 )
@@ -25,7 +23,6 @@ func init() {
 		marketShowCmd,
 		marketCreteCmd,
 		marketCancelCmd,
-		marketProcessingCmd,
 	)
 }
 
@@ -37,52 +34,32 @@ var marketRootCmd = &cobra.Command{
 var marketSearchCmd = &cobra.Command{
 	Use:    "search <slot.yaml>",
 	Short:  "Search for orders on Marketplace",
-	PreRun: loadKeyStoreWrapper,
 	Args:   cobra.MinimumNArgs(1),
+	PreRun: loadKeyStoreIfRequired,
 	Run: func(cmd *cobra.Command, args []string) {
-		market, err := NewMarketInteractor(nodeAddressFlag, timeoutFlag)
-		if err != nil {
-			showError(cmd, "Cannot connect to Node", err)
-			os.Exit(1)
-		}
-
-		ordType, err := structs.ParseOrderType(orderSearchType)
-		slotPath := args[0]
-		if err != nil || ordType == pb.OrderType_ANY {
-			showError(cmd, "Cannot parse order type", err)
-			os.Exit(1)
-		}
-
-		slot, err := loadSlotFile(slotPath)
-		if err != nil {
-			showError(cmd, "Cannot parse slot file", err)
-			os.Exit(1)
-		}
-
-		orders, err := market.GetOrders(slot, ordType, ordersSearchLimit)
-		if err != nil {
-			showError(cmd, "Cannot get orders", err)
-			os.Exit(1)
-		}
-
-		printSearchResults(cmd, orders)
+		// todo: need to implement with new market API.
+		showError(cmd, "not implemented", nil)
+		os.Exit(1)
 	},
 }
 
 var marketShowCmd = &cobra.Command{
 	Use:    "show <order_id>",
 	Short:  "Show order details",
-	PreRun: loadKeyStoreWrapper,
 	Args:   cobra.MinimumNArgs(1),
+	PreRun: loadKeyStoreIfRequired,
 	Run: func(cmd *cobra.Command, args []string) {
-		market, err := NewMarketInteractor(nodeAddressFlag, timeoutFlag)
+		ctx, cancel := newTimeoutContext()
+		defer cancel()
+
+		market, err := newMarketClient(ctx)
 		if err != nil {
-			showError(cmd, "Cannot connect to Node", err)
+			showError(cmd, "Cannot create client connection", err)
 			os.Exit(1)
 		}
 
 		orderID := args[0]
-		order, err := market.GetOrderByID(orderID)
+		order, err := market.GetOrderByID(ctx, &pb.ID{Id: orderID})
 		if err != nil {
 			showError(cmd, "Cannot get order by ID", err)
 			os.Exit(1)
@@ -92,88 +69,39 @@ var marketShowCmd = &cobra.Command{
 	},
 }
 
-var marketProcessingCmd = &cobra.Command{
-	Use:    "processing",
-	Short:  "Show processing orders",
-	PreRun: loadKeyStoreWrapper,
-	Run: func(cmd *cobra.Command, args []string) {
-		market, err := NewMarketInteractor(nodeAddressFlag, timeoutFlag)
-		if err != nil {
-			showError(cmd, "Cannot connect to Node", err)
-			os.Exit(1)
-		}
-
-		reply, err := market.GetProcessing()
-		if err != nil {
-			showError(cmd, "Cannot get processing orders", err)
-			os.Exit(1)
-		}
-		printProcessingOrders(cmd, reply)
-	},
-}
+// Note: here is no processing method at all, we need to move matching code
+// into the separated package, and then reinvent processing from scratch.
 
 var marketCreteCmd = &cobra.Command{
 	Use:    "create <price> <slot.yaml> [supplier-eth-addr]",
 	Short:  "Place new Bid order on Marketplace",
-	PreRun: loadKeyStoreWrapper,
 	Args:   cobra.MinimumNArgs(2),
+	PreRun: loadKeyStoreIfRequired,
 	Run: func(cmd *cobra.Command, args []string) {
-		market, err := NewMarketInteractor(nodeAddressFlag, timeoutFlag)
-		if err != nil {
-			showError(cmd, "Cannot connect to Node", err)
-			os.Exit(1)
-		}
-
-		price := args[0]
-		orderPath := args[1]
-
-		bigPrice, err := pb.NewBigIntFromString(price)
-		if err != nil {
-			showError(cmd, "Cannot parse price", err)
-			os.Exit(1)
-		}
-
-		slot, err := loadSlotFile(orderPath)
-		if err != nil {
-			showError(cmd, "Cannot load order", err)
-			os.Exit(1)
-		}
-
-		order := &pb.Order{
-			PricePerSecond: bigPrice,
-			Slot:           slot.Unwrap(),
-			OrderType:      pb.OrderType_BID,
-		}
-
-		if len(args) > 2 {
-			order.SupplierID = common.HexToAddress(args[2]).Hex()
-		}
-
-		created, err := market.CreateOrder(order)
-		if err != nil {
-			showError(cmd, "Cannot create order at Marketplace", err)
-			os.Exit(1)
-		}
-
-		printID(cmd, created.Id)
+		// todo: need to implement with new market API.
+		// todo: create parser for bid.yaml
+		showError(cmd, "not implemented", nil)
+		os.Exit(1)
 	},
 }
 
 var marketCancelCmd = &cobra.Command{
 	Use:    "cancel <order_id>",
 	Short:  "Cancel order on Marketplace",
-	PreRun: loadKeyStoreWrapper,
 	Args:   cobra.MinimumNArgs(1),
+	PreRun: loadKeyStoreIfRequired,
 	Run: func(cmd *cobra.Command, args []string) {
-		market, err := NewMarketInteractor(nodeAddressFlag, timeoutFlag)
+		ctx, cancel := newTimeoutContext()
+		defer cancel()
+
+		market, err := newMarketClient(ctx)
 		if err != nil {
-			showError(cmd, "Cannot connect to Node", err)
+			showError(cmd, "Cannot create client connection", err)
 			os.Exit(1)
 		}
 
 		orderID := args[0]
-
-		err = market.CancelOrder(orderID)
+		_, err = market.CancelOrder(ctx, &pb.ID{Id: orderID})
 		if err != nil {
 			showError(cmd, "Cannot cancel order on Marketplace", err)
 			os.Exit(1)

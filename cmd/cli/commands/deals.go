@@ -2,9 +2,9 @@ package commands
 
 import (
 	"os"
-
 	"strings"
 
+	"github.com/ethereum/go-ethereum/common"
 	pb "github.com/sonm-io/core/proto"
 	"github.com/sonm-io/core/util"
 	"github.com/spf13/cobra"
@@ -29,9 +29,8 @@ func init() {
 }
 
 var nodeDealsRootCmd = &cobra.Command{
-	Use:    "deals",
-	Short:  "Manage deals",
-	PreRun: loadKeyStoreWrapper,
+	Use:   "deals",
+	Short: "Manage deals",
 }
 
 var dealsListCmd = &cobra.Command{
@@ -39,9 +38,12 @@ var dealsListCmd = &cobra.Command{
 	Short:  "Show my deals",
 	PreRun: loadKeyStoreWrapper,
 	Run: func(cmd *cobra.Command, _ []string) {
-		itr, err := NewDealsInteractor(nodeAddressFlag, timeoutFlag)
+		ctx, cancel := newTimeoutContext()
+		defer cancel()
+
+		dealer, err := newDealsClient(ctx)
 		if err != nil {
-			showError(cmd, "Cannot connect to Node", err)
+			showError(cmd, "Cannot create client connection", err)
 			os.Exit(1)
 		}
 
@@ -51,13 +53,17 @@ var dealsListCmd = &cobra.Command{
 			from = util.PubKeyToAddr(sessionKey.PublicKey).Hex()
 		}
 
-		deals, err := itr.List(from, status)
+		req := &pb.DealListRequest{
+			Owner:  &pb.EthAddress{Address: common.HexToAddress(from).Bytes()},
+			Status: status,
+		}
+		deals, err := dealer.List(ctx, req)
 		if err != nil {
 			showError(cmd, "Cannot get deals list", err)
 			os.Exit(1)
 		}
 
-		printDealsList(cmd, deals)
+		printDealsList(cmd, deals.GetDeal())
 	},
 }
 
@@ -65,11 +71,14 @@ var dealsStatusCmd = &cobra.Command{
 	Use:    "status <deal_id>",
 	Short:  "show deal status",
 	Args:   cobra.MinimumNArgs(1),
-	PreRun: loadKeyStoreWrapper,
+	PreRun: loadKeyStoreIfRequired,
 	Run: func(cmd *cobra.Command, args []string) {
-		itr, err := NewDealsInteractor(nodeAddressFlag, timeoutFlag)
+		ctx, cancel := newTimeoutContext()
+		defer cancel()
+
+		dealer, err := newDealsClient(ctx)
 		if err != nil {
-			showError(cmd, "Cannot connect to Node", err)
+			showError(cmd, "Cannot create client connection", err)
 			os.Exit(1)
 		}
 
@@ -80,7 +89,7 @@ var dealsStatusCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		reply, err := itr.Status(id)
+		reply, err := dealer.Status(ctx, &pb.ID{Id: id})
 		if err != nil {
 			showError(cmd, "Cannot get deal info", err)
 			os.Exit(1)
@@ -94,11 +103,14 @@ var dealsFinishCmd = &cobra.Command{
 	Use:    "finish <deal_id>",
 	Short:  "finish deal",
 	Args:   cobra.MinimumNArgs(1),
-	PreRun: loadKeyStoreWrapper,
+	PreRun: loadKeyStoreIfRequired,
 	Run: func(cmd *cobra.Command, args []string) {
-		itr, err := NewDealsInteractor(nodeAddressFlag, timeoutFlag)
+		ctx, cancel := newTimeoutContext()
+		defer cancel()
+
+		dealer, err := newDealsClient(ctx)
 		if err != nil {
-			showError(cmd, "Cannot connect to Node", err)
+			showError(cmd, "Cannot create client connection", err)
 			os.Exit(1)
 		}
 
@@ -109,7 +121,7 @@ var dealsFinishCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		err = itr.FinishDeal(id)
+		_, err = dealer.Finish(ctx, &pb.ID{Id: id})
 		if err != nil {
 			showError(cmd, "Cannot finish deal", err)
 			os.Exit(1)
@@ -118,13 +130,11 @@ var dealsFinishCmd = &cobra.Command{
 	},
 }
 
-func convertTransactionStatus(s string) pb.DealStatus {
+func convertTransactionStatus(s string) pb.MarketDealStatus {
 	s = strings.ToUpper(s)
-	// looks stupid, but more convenient to use and easy to type
-	if s == "ANY" {
-		s = "ANY_STATUS"
-	}
+	// add prefix for protobuf constants
+	s = "MARKET_STATUS_" + s
 
-	id := pb.DealStatus_value[s]
-	return pb.DealStatus(id)
+	id := pb.MarketDealStatus_value[s]
+	return pb.MarketDealStatus(id)
 }

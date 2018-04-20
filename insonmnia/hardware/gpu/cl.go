@@ -22,21 +22,24 @@ import (
 	"fmt"
 	"strconv"
 	"unsafe"
+
+	"github.com/sonm-io/core/proto"
 )
 
 const (
-	maxPlatforms   = 32
-	maxDeviceCount = 64
+	maxPlatforms              = 32
+	maxDeviceCount            = 64
+	CL_PLATFORM_NOT_FOUND_KHR = C.cl_int(-1001)
 )
 
 // GetGPUDevicesUsingOpenCL returns a list of available GPU devices on the machine using OpenCL API.
-func GetGPUDevicesUsingOpenCL() ([]Device, error) {
+func GetGPUDevicesUsingOpenCL() ([]*sonm.GPUDevice, error) {
 	platforms, err := getPlatforms()
 	if err != nil {
 		return nil, err
 	}
 
-	var result []Device
+	var result []*sonm.GPUDevice
 
 	for _, platform := range platforms {
 		devices, err := platform.getGPUDevices()
@@ -45,41 +48,32 @@ func GetGPUDevicesUsingOpenCL() ([]Device, error) {
 		}
 
 		for _, d := range devices {
-			options := []Option{}
-			name, err := d.name()
+			name, err := d.deviceName()
 			if err != nil {
 				return nil, err
 			}
 
-			vendor, err := d.vendor()
+			vendorName, err := d.vendorName()
 			if err != nil {
 				return nil, err
 			}
 
-			maxClockFrequency, err := d.deviceMaxClockFrequency()
+			vendorId, err := d.vendorID()
 			if err != nil {
 				return nil, err
 			}
 
-			globalMemSize, err := d.globalMemSize()
+			memInfo, err := d.globalMemory()
 			if err != nil {
 				return nil, err
 			}
 
-			if vendorId, err := d.vendorId(); err == nil {
-				options = append(options, WithVendorId(vendorId))
-			}
-
-			if deviceVersion, err := d.deviceVersion(); err == nil {
-				options = append(options, WithOpenClDeviceVersion(deviceVersion))
-			}
-
-			device, err := NewDevice(name, vendor, uint64(maxClockFrequency), globalMemSize, options...)
-			if err != nil {
-				return nil, err
-			}
-
-			result = append(result, device)
+			result = append(result, &sonm.GPUDevice{
+				DeviceName: name,
+				VendorID:   uint64(vendorId),
+				VendorName: vendorName,
+				Memory:     memInfo,
+			})
 		}
 	}
 
@@ -95,6 +89,10 @@ func getPlatforms() ([]*platform, error) {
 	var num C.cl_uint
 
 	if err := C.clGetPlatformIDs(C.cl_uint(maxPlatforms), &ids[0], &num); err != C.CL_SUCCESS {
+		if err == CL_PLATFORM_NOT_FOUND_KHR {
+			return []*platform{}, nil
+		}
+
 		return nil, fmt.Errorf("failed to obtain OpenCL platforms: %s", errorToString(err))
 	}
 
@@ -161,36 +159,20 @@ func (d *clDevice) getInfoUint64(param C.cl_device_info) (uint64, error) {
 	return uint64(val), nil
 }
 
-func (d *clDevice) name() (string, error) {
+func (d *clDevice) deviceName() (string, error) {
 	return d.getInfoString(C.CL_DEVICE_NAME)
 }
 
-func (d *clDevice) vendor() (string, error) {
+func (d *clDevice) vendorName() (string, error) {
 	return d.getInfoString(C.CL_DEVICE_VENDOR)
 }
 
-func (d *clDevice) vendorId() (uint, error) {
+func (d *clDevice) vendorID() (uint, error) {
 	return d.getInfoUint(C.CL_DEVICE_VENDOR_ID)
 }
 
-func (d *clDevice) globalMemSize() (uint64, error) {
+func (d *clDevice) globalMemory() (uint64, error) {
 	return d.getInfoUint64(C.CL_DEVICE_GLOBAL_MEM_SIZE)
-}
-
-func (d *clDevice) driverVersion() (string, error) {
-	return d.getInfoString(C.CL_DRIVER_VERSION)
-}
-
-func (d *clDevice) deviceVersion() (string, error) {
-	return d.getInfoString(C.CL_DEVICE_VERSION)
-}
-
-func (d *clDevice) deviceMaxClockFrequency() (uint, error) {
-	return d.getInfoUint(C.CL_DEVICE_MAX_CLOCK_FREQUENCY)
-}
-
-func (d *clDevice) deviceMaxComputeUnits() (uint, error) {
-	return d.getInfoUint(C.CL_DEVICE_MAX_COMPUTE_UNITS)
 }
 
 func errorToString(err C.cl_int) string {
@@ -287,6 +269,8 @@ func errorToString(err C.cl_int) string {
 		return "invalid buffer size"
 	case C.CL_INVALID_MIP_LEVEL:
 		return "invalid mip-map level"
+	case CL_PLATFORM_NOT_FOUND_KHR:
+		return "no valid ICDs found"
 	default:
 		return "unknown OpenCL error: " + strconv.FormatInt(int64(err), 10)
 	}

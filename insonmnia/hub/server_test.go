@@ -7,77 +7,40 @@ import (
 
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/golang/mock/gomock"
-	"github.com/sonm-io/core/blockchain"
-	"github.com/sonm-io/core/insonmnia/hardware"
-	"github.com/sonm-io/core/insonmnia/hardware/cpu"
-	"github.com/sonm-io/core/insonmnia/hardware/gpu"
-	"github.com/sonm-io/core/insonmnia/structs"
+	"github.com/sonm-io/core/insonmnia/benchmarks"
+	"github.com/sonm-io/core/insonmnia/miner"
+	"github.com/sonm-io/core/insonmnia/miner/plugin"
 	pb "github.com/sonm-io/core/proto"
 	"github.com/sonm-io/core/util"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestDevices(t *testing.T) {
-	// GPU characteristics shared between miners.
-	gpuDevice, err := gpu.NewDevice("a", "b", 1488, 660)
-	assert.NoError(t, err)
-
-	hub := Hub{
-		miners: map[string]*MinerCtx{
-			"miner1": {
-				uuid: "miner1",
-				capabilities: &hardware.Hardware{
-					CPU: []cpu.Device{{CPU: 64}},
-					GPU: []gpu.Device{gpuDevice},
-				},
-			},
-			"miner2": {
-				uuid: "miner2",
-				capabilities: &hardware.Hardware{
-					CPU: []cpu.Device{{CPU: 65}},
-					GPU: []gpu.Device{gpuDevice},
-				},
-			},
-		},
+func defaultMinerMockCfg() *miner.Config {
+	return &miner.Config{
+		Endpoint:  "127.0.0.1:10002",
+		Resources: &miner.ResourcesConfig{},
+		SSH:       &miner.SSHConfig{},
+		PublicIPs: []string{"192.168.70.17", "46.148.198.133"},
+		Plugins:   plugin.Config{},
+		Whitelist: miner.WhitelistConfig{Enabled: new(bool)},
 	}
-
-	devices, err := hub.Devices(context.Background(), &pb.Empty{})
-	assert.NoError(t, err)
-	assert.Equal(t, len(devices.CPUs), 2)
-	assert.Equal(t, len(devices.GPUs), 1)
 }
 
-func TestMinerDevices(t *testing.T) {
-	gpuDevice, err := gpu.NewDevice("a", "b", 1488, 660)
-	assert.NoError(t, err)
+func getTestMiner(mock *gomock.Controller) (*miner.Miner, error) {
+	cfg := defaultMinerMockCfg()
 
-	hub := Hub{
-		miners: map[string]*MinerCtx{
-			"miner1": {
-				uuid: "miner1",
-				capabilities: &hardware.Hardware{
-					CPU: []cpu.Device{{CPU: 64}},
-					GPU: []gpu.Device{gpuDevice},
-				},
-			},
+	ovs := miner.NewMockOverseer(mock)
+	ovs.EXPECT().Info(gomock.Any()).AnyTimes().Return(map[string]miner.ContainerMetrics{}, nil)
 
-			"miner2": {
-				uuid: "miner2",
-				capabilities: &hardware.Hardware{
-					CPU: []cpu.Device{{CPU: 65}},
-					GPU: []gpu.Device{gpuDevice},
-				},
-			},
-		},
-	}
+	bl := benchmarks.NewMockBenchList(mock)
+	bl.EXPECT().List().AnyTimes().Return(map[pb.DeviceType][]*pb.Benchmark{})
 
-	devices, err := hub.MinerDevices(context.Background(), &pb.ID{Id: "miner1"})
-	assert.NoError(t, err)
-	assert.Equal(t, len(devices.CPUs), 1)
-	assert.Equal(t, len(devices.GPUs), 1)
-
-	devices, err = hub.MinerDevices(context.Background(), &pb.ID{Id: "span"})
-	assert.Error(t, err)
+	return miner.NewMiner(
+		cfg,
+		miner.WithKey(getTestKey()),
+		miner.WithOverseer(ovs),
+		miner.WithBenchmarkList(bl),
+	)
 }
 
 var (
@@ -90,86 +53,42 @@ func getTestKey() *ecdsa.PrivateKey {
 	return k
 }
 
-func getTestMarket(ctrl *gomock.Controller) pb.MarketClient {
-	m := pb.NewMockMarketClient(ctrl)
-
-	ord := &pb.Order{
-		Id:             "my-order-id",
-		OrderType:      pb.OrderType_BID,
-		PricePerSecond: pb.NewBigIntFromInt(1000),
-		ByuerID:        addr.Hex(),
-		Slot: &pb.Slot{
-			Resources: &pb.Resources{},
-		},
-	}
-	// TODO: fix this - it does not really call create order or cancel order
-	m.EXPECT().CreateOrder(gomock.Any(), gomock.Any()).AnyTimes().
-		Return(ord, nil).AnyTimes()
-	m.EXPECT().CancelOrder(gomock.Any(), gomock.Any()).AnyTimes().
-		Return(&pb.Empty{}, nil).AnyTimes()
-	return m
-}
-
-func getTestHubConfig() *Config {
-	return &Config{
-		Endpoint: "127.0.0.1:10002",
-		Cluster: ClusterConfig{
-			Endpoint: "127.0.0.1:10001",
-			Failover: false,
-			Store:    StoreConfig{Type: "boltdb", Endpoint: "tmp/sonm/boltdb", Bucket: "sonm"},
-		},
-		Whitelist: WhitelistConfig{Enabled: new(bool)},
-	}
-}
-
-func getTestCluster(ctrl *gomock.Controller) Cluster {
-	cl := NewMockCluster(ctrl)
-	cl.EXPECT().Synchronize(gomock.Any()).AnyTimes().Return(nil)
-	return cl
-}
-
 func buildTestHub(ctrl *gomock.Controller) (*Hub, error) {
-	market := getTestMarket(ctrl)
-	clustr := getTestCluster(ctrl)
-	config := getTestHubConfig()
+	config := defaultMinerMockCfg()
+	worker, _ := getTestMiner(ctrl)
 
-	bc := blockchain.NewMockBlockchainer(ctrl)
-	bc.EXPECT().GetDealInfo(gomock.Any()).AnyTimes().Return(&pb.Deal{}, nil)
-
-	return New(context.Background(), config, WithPrivateKey(key), WithMarket(market),
-		WithCluster(clustr, nil), WithBlockchain(bc))
+	return New(config, WithPrivateKey(key), WithWorker(worker))
 }
 
 //TODO: Move this to separate test for AskPlans
 func TestHubCreateRemoveSlot(t *testing.T) {
+	t.Skip()
+
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	hu, err := buildTestHub(ctrl)
 	assert.NoError(t, err)
 
-	req := &pb.InsertSlotRequest{
-		PricePerSecond: pb.NewBigIntFromInt(100),
-		Slot: &pb.Slot{
-			Duration:  uint64(structs.MinSlotDuration.Seconds()),
-			Resources: &pb.Resources{},
-		},
+	req := &pb.AskPlan{
+		Duration:  &pb.Duration{Nanoseconds: pb.MinDealDuration.Nanoseconds()},
+		Resources: &pb.AskPlanResources{},
 	}
 
 	testCtx := context.Background()
 
-	id, err := hu.InsertSlot(testCtx, req)
+	id, err := hu.CreateAskPlan(testCtx, req)
 	assert.NoError(t, err)
 	assert.True(t, id.Id != "", "ID must not be empty")
 
-	actualSlots, err := hu.Slots(testCtx, &pb.Empty{})
+	actualSlots, err := hu.AskPlans(testCtx, &pb.Empty{})
 	assert.NoError(t, err)
-	assert.Equal(t, len(actualSlots.Slots), 1)
+	assert.Equal(t, len(actualSlots.AskPlans), 1)
 
-	_, err = hu.RemoveSlot(testCtx, id)
+	_, err = hu.RemoveAskPlan(testCtx, id)
 	assert.NoError(t, err)
 
-	actualSlots, err = hu.Slots(testCtx, &pb.Empty{})
+	actualSlots, err = hu.AskPlans(testCtx, &pb.Empty{})
 	assert.NoError(t, err)
-	assert.Equal(t, len(actualSlots.Slots), 0)
+	assert.Equal(t, len(actualSlots.AskPlans), 0)
 }

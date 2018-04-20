@@ -2,44 +2,40 @@ package hub
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	log "github.com/noxiouz/zapctx/ctxlog"
 	"github.com/sonm-io/core/insonmnia/auth"
+	"github.com/sonm-io/core/insonmnia/logging"
+	"github.com/sonm-io/core/insonmnia/miner"
 	"github.com/sonm-io/core/insonmnia/structs"
 	"github.com/sonm-io/core/proto"
-	pb "github.com/sonm-io/core/proto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 )
 
-func makeDefaultOrder(t *testing.T, buyerId string) *structs.Order {
-	slot := &pb.Slot{
-		Duration:  uint64(structs.MinSlotDuration.Seconds()),
-		Resources: &pb.Resources{},
-	}
-
-	order, err := structs.NewOrder(&pb.Order{
-		ByuerID:        buyerId,
-		Slot:           slot,
-		PricePerSecond: pb.NewBigIntFromInt(1),
-	})
-	assert.NoError(t, err)
-	return order
+func testCtx() context.Context {
+	logger := logging.BuildLogger(*logging.NewLevel(zapcore.DebugLevel))
+	return log.WithLogger(context.Background(), logger)
 }
 
-func makeHubWithOrder(t *testing.T, buyerId string, dealId DealID) *Hub {
-	order := makeDefaultOrder(t, buyerId)
+func makeHubWithOrder(t *testing.T, ctx context.Context, buyerId string, dealId structs.DealID) *Hub {
 	return &Hub{
-		deals: map[DealID]*DealMeta{dealId: {Order: *order}},
+		ctx: ctx,
+		worker: &miner.Miner{
+			Deals: map[structs.DealID]*structs.DealMeta{dealId: {Deal: &sonm.MarketDeal{ConsumerID: buyerId}}},
+		},
 	}
 }
 
 func TestFieldDealMetaData(t *testing.T) {
-	request := &sonm.HubStartTaskRequest{
+	request := &sonm.StartTaskRequest{
 		Deal: &sonm.Deal{
 			Id: "0x42",
 		},
@@ -48,7 +44,7 @@ func TestFieldDealMetaData(t *testing.T) {
 	md := newFieldDealExtractor()
 	dealID, err := md(context.Background(), request)
 	require.NoError(t, err)
-	assert.Equal(t, DealID("0x42"), dealID)
+	assert.Equal(t, structs.DealID("0x42"), dealID)
 }
 
 func TestFieldDealMetaDataErrorsOnInvalidType(t *testing.T) {
@@ -62,7 +58,7 @@ func TestFieldDealMetaDataErrorsOnInvalidType(t *testing.T) {
 	md := newFieldDealExtractor()
 	dealID, err := md(context.Background(), request)
 	assert.Error(t, err)
-	assert.Equal(t, DealID(""), dealID)
+	assert.Equal(t, structs.DealID(""), dealID)
 }
 
 func TestFieldDealMetaDataErrorsOnInvalidInnerType(t *testing.T) {
@@ -81,7 +77,7 @@ func TestFieldDealMetaDataErrorsOnInvalidInnerType(t *testing.T) {
 	md := newFieldDealExtractor()
 	dealID, err := md(context.Background(), request)
 	assert.Error(t, err)
-	assert.Equal(t, DealID(""), dealID)
+	assert.Equal(t, structs.DealID(""), dealID)
 }
 
 func TestContextDealMetaData(t *testing.T) {
@@ -92,22 +88,22 @@ func TestContextDealMetaData(t *testing.T) {
 	md := newContextDealExtractor()
 	dealID, err := md(ctx, nil)
 	require.NoError(t, err)
-	assert.Equal(t, DealID("0x42"), dealID)
+	assert.Equal(t, structs.DealID("0x42"), dealID)
 }
 
 func TestDealAuthorization(t *testing.T) {
-	ctx := peer.NewContext(context.Background(), &peer.Peer{
+	ctx := peer.NewContext(testCtx(), &peer.Peer{
 		AuthInfo: auth.EthAuthInfo{TLS: credentials.TLSInfo{}, Wallet: addr},
 	})
 
-	request := &sonm.HubStartTaskRequest{
+	request := &sonm.StartTaskRequest{
 		Deal: &sonm.Deal{
 			Id: "0x42",
 		},
 	}
 
 	md := newFieldDealExtractor()
-	authorization := newDealAuthorization(context.Background(), makeHubWithOrder(t, addr.Hex(), "0x42"), md)
+	authorization := newDealAuthorization(ctx, makeHubWithOrder(t, ctx, addr.Hex(), "0x42"), md)
 
 	require.NoError(t, authorization.Authorize(ctx, request))
 }
@@ -117,14 +113,14 @@ func TestDealAuthorizationErrors(t *testing.T) {
 		AuthInfo: auth.EthAuthInfo{TLS: credentials.TLSInfo{}, Wallet: addr},
 	})
 
-	request := &sonm.HubStartTaskRequest{
+	request := &sonm.StartTaskRequest{
 		Deal: &sonm.Deal{
 			Id: "0x42",
 		},
 	}
 
 	md := newFieldDealExtractor()
-	au := newDealAuthorization(context.Background(), makeHubWithOrder(t, "0x100500", "0x42"), md)
+	au := newDealAuthorization(context.Background(), makeHubWithOrder(t, ctx, "0x100500", "0x42"), md)
 
 	require.Error(t, au.Authorize(ctx, request))
 }
@@ -138,14 +134,45 @@ func TestDealAuthorizationErrorsOnInvalidWallet(t *testing.T) {
 		"wallet": {"0x100500"},
 	}))
 
-	request := &sonm.HubStartTaskRequest{
+	request := &sonm.StartTaskRequest{
 		Deal: &sonm.Deal{
 			Id: "0x42",
 		},
 	}
 
 	md := newFieldDealExtractor()
-	au := newDealAuthorization(context.Background(), makeHubWithOrder(t, "0x100500", "0x42"), md)
+	au := newDealAuthorization(context.Background(), makeHubWithOrder(t, ctx, "0x100500", "0x42"), md)
 
 	require.Error(t, au.Authorize(ctx, request))
+}
+
+type magicAuthorizer struct {
+	ok bool
+}
+
+func (ma *magicAuthorizer) Authorize(ctx context.Context, request interface{}) error {
+	if ma.ok {
+		return nil
+	}
+
+	return errors.New("sorry")
+}
+
+func TestMultiAuth(t *testing.T) {
+	mul := newMultiAuth(&magicAuthorizer{ok: true}, &magicAuthorizer{ok: true}, &magicAuthorizer{ok: true})
+	err := mul.Authorize(context.Background(), nil)
+	assert.NoError(t, err)
+
+	mul = newMultiAuth(&magicAuthorizer{ok: false}, &magicAuthorizer{ok: false}, &magicAuthorizer{ok: true})
+	err = mul.Authorize(context.Background(), nil)
+	assert.NoError(t, err)
+
+	mul = newMultiAuth(&magicAuthorizer{ok: true}, &magicAuthorizer{ok: false}, &magicAuthorizer{ok: false})
+	err = mul.Authorize(context.Background(), nil)
+	assert.NoError(t, err)
+
+	mul = newMultiAuth(&magicAuthorizer{ok: false}, &magicAuthorizer{ok: false}, &magicAuthorizer{ok: false})
+
+	err = mul.Authorize(context.Background(), nil)
+	assert.Error(t, err)
 }

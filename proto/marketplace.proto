@@ -1,47 +1,99 @@
 syntax = "proto3";
 
-import "bid.proto";
+import "bigint.proto";
 import "insonmnia.proto";
 import "timestamp.proto";
 
 package sonm;
 
 service Market {
+    // GetOrders returns orders by given filter parameters.
+    // Note that set of filters may be changed in the closest future.
     rpc GetOrders(GetOrdersRequest) returns (GetOrdersReply) {}
-    rpc GetOrderByID(ID) returns (Order) {}
-    rpc CreateOrder(Order) returns (Order) {}
-    rpc CancelOrder(Order) returns (Empty) {}
-    rpc TouchOrders(TouchOrdersRequest) returns (Empty) {}
-    // GetProcessing returns currently processing orders
-    // not required in Marketplace service
-    // must be implemented on Node
-    rpc GetProcessing(Empty) returns (GetProcessingReply) {}
+    // CreateOrder places new order on the Marketplace.
+    // Note that current impl of Node API prevents you from
+    // creating ASKs orders.
+    rpc CreateOrder(MarketOrder) returns (MarketOrder) {}
+    // GetOrderByID returns order by given ID.
+    // If order save an `inactive` status returns error instead.
+    rpc GetOrderByID(ID) returns (MarketOrder) {}
+    // CancelOrder removes active order from the Marketplace.
+    rpc CancelOrder(ID) returns (Empty) {}
 }
 
 message GetOrdersRequest {
-    // Order keeps slot and type for searching
-    Order order = 1;
-    // Count describe how namy results must be returned (order by price)
-    uint64 count = 2;
+    MarketOrderType type = 1;
+    BigInt Price = 2;
+    EthAddress Counterparty  = 3;
+    uint64 count = 4;
 }
 
 message GetOrdersReply {
-    repeated Order orders = 1;
+    repeated MarketOrder orders = 1;
 }
 
-// GetProcessingReply represent Node's local
-// orders processing status
-message GetProcessingReply {
-    message ProcessedOrder {
-        string id = 1;
-        uint32 status = 2;
-        Timestamp timestamp = 3;
-        string extra = 4;
-    }
-
-    map <string, ProcessedOrder> orders = 2;
+enum MarketOrderType {
+    MARKET_ANY = 0;
+    MARKET_BID = 1;
+    MARKET_ASK = 2;
 }
 
-message TouchOrdersRequest {
-    repeated string IDs = 1;
+enum MarketOrderStatus {
+    MARKET_ORDER_INACTIVE = 0;
+    MARKET_ORDER_ACTIVE = 1;
+}
+
+enum MarketIdentityLevel {
+    MARKET_ANONIMOUS = 0;
+    MARKET_PSEUDONYMOUS = 1;
+    MARKET_IDENTIFIED = 2;
+}
+
+enum MarketDealStatus {
+    MARKET_STATUS_UNKNOWN = 0;
+    MARKET_STATUS_ACCEPTED = 1;
+    MARKET_STATUS_CLOSED = 2;
+}
+
+enum MarketChangeRequestStatus {
+    REQUEST_UNKNOWN = 0;
+    REQUEST_CREATED = 1;
+    REQUEST_CANCELED = 2;
+    REQUEST_REJECTED = 3;
+    REQUEST_ACCEPTED = 4;
+}
+
+message MarketDeal {
+    string id = 1;
+    repeated uint64 benchmarks = 2;
+    string supplierID = 3;
+    string consumerID = 4;
+    string masterID = 5;
+    string askID = 6;
+    string bidID = 7;
+    uint64 duration = 8;
+    BigInt price = 9;
+    Timestamp startTime = 10;
+    Timestamp endTime = 11;
+    MarketDealStatus status = 12;
+    BigInt blockedBalance = 13;
+    BigInt totalPayout = 14;
+    Timestamp lastBillTS = 15;
+}
+
+message MarketOrder {
+    string id = 1;
+    string dealID = 2;
+    MarketOrderType orderType = 3;
+    MarketOrderStatus orderStatus = 4;
+    string authorID = 5;
+    string counterpartyID = 6;
+    uint64 duration = 7;
+    BigInt price = 8;
+    uint64 netflags = 9;
+    MarketIdentityLevel identityLevel = 10;
+    string blacklist = 11;
+    bytes tag = 12;
+    repeated uint64 benchmarks = 13;
+    BigInt frozenSum = 14;
 }

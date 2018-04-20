@@ -1,66 +1,58 @@
 package miner
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"strconv"
 	"sync"
 	"time"
 
-	"github.com/ccding/go-stun/stun"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
-	"github.com/gliderlabs/ssh"
-	"github.com/grpc-ecosystem/go-grpc-prometheus"
 	log "github.com/noxiouz/zapctx/ctxlog"
-	"github.com/pborman/uuid"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/pkg/errors"
-	"github.com/sonm-io/core/insonmnia/auth"
+	"github.com/sonm-io/core/blockchain"
+	"github.com/sonm-io/core/insonmnia/cgroups"
+	"github.com/sonm-io/core/insonmnia/dwh"
+	"github.com/sonm-io/core/insonmnia/miner/gpu"
+	"github.com/sonm-io/core/insonmnia/state"
+	"github.com/sonm-io/core/util"
+
+	// todo: drop alias
+	bm "github.com/sonm-io/core/insonmnia/benchmarks"
 	"github.com/sonm-io/core/insonmnia/hardware"
 	"github.com/sonm-io/core/insonmnia/miner/plugin"
 	"github.com/sonm-io/core/insonmnia/miner/volume"
 	"github.com/sonm-io/core/insonmnia/resource"
 	"github.com/sonm-io/core/insonmnia/structs"
 	pb "github.com/sonm-io/core/proto"
-	"github.com/sonm-io/core/util"
-	"github.com/sonm-io/core/util/xgrpc"
 	"go.uber.org/zap"
 	"golang.org/x/net/context"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
 // Miner holds information about jobs, make orders to Observer and communicates with Hub
 type Miner struct {
-	ctx        context.Context
-	cancel     context.CancelFunc
-	grpcServer *grpc.Server
-
-	plugins *plugin.Repository
-
-	// Miner name for nice self-representation.
-	name      string
+	ctx       context.Context
+	cfg       *Config
+	mu        sync.Mutex
+	ovs       Overseer
+	plugins   *plugin.Repository
 	hardware  *hardware.Hardware
 	resources *resource.Pool
-
-	hubAddress string
-	hubKey     *ecdsa.PublicKey
-
+	ethkey    *ecdsa.PrivateKey
 	publicIPs []string
-	natType   stun.NATType
+	eth       blockchain.API
+	dwh       dwh.MockDWH
 
-	rl *reverseListener
-
-	ovs Overseer
-
-	mu sync.Mutex
 	// One-to-one mapping between container IDs and userland task names.
 	//
 	// The overseer operates with containers in terms of their ID, which does not change even during auto-restart.
@@ -68,28 +60,30 @@ type Miner struct {
 	// transform between these two identifiers this map exists.
 	//
 	// WARNING: This must be protected using `mu`.
+	//
+	// fixme: only write and delete on this struct, looks like we can
+	// safety removes them.
 	nameMapping map[string]string
 
 	// Maps StartRequest's IDs to containers' IDs
 	// TODO: It's doubtful that we should keep this map here instead in the Overseer.
 	containers map[string]*ContainerInfo
 
-	statusChannels map[int]chan bool
-	channelCounter int
-	controlGroup   cGroup
-	cGroupManager  cGroupManager
-	ssh            SSH
+	controlGroup  cgroups.CGroup
+	cGroupManager cgroups.CGroupManager
+	ssh           SSH
 
-	connectedHubs     map[string]struct{}
-	connectedHubsLock sync.Mutex
+	// external and in-mem storage
+	state         *state.Storage
+	benchmarkList bm.BenchList
 
-	// GRPC TransportCredentials for eth based Auth
-	creds credentials.TransportCredentials
-	// Certificate rotator
-	certRotator util.HitlessCertRotator
+	// In-mem state, can be safety reloaded
+	// from the external sources.
+	// Must be protected by `mu` mutex.
+	Deals map[structs.DealID]*structs.DealMeta
 }
 
-func NewMiner(cfg Config, opts ...Option) (m *Miner, err error) {
+func NewMiner(cfg *Config, opts ...Option) (m *Miner, err error) {
 	o := &options{}
 	for _, opt := range opts {
 		opt(o)
@@ -103,123 +97,115 @@ func NewMiner(cfg Config, opts ...Option) (m *Miner, err error) {
 		return nil, errors.New("private key is mandatory")
 	}
 
+	if o.storage == nil {
+		return nil, errors.New("state storage is mandatory")
+	}
+
 	if o.ctx == nil {
 		o.ctx = context.Background()
 	}
 
-	if len(o.uuid) == 0 {
-		o.uuid = uuid.New()
-	}
-
-	if o.hardware == nil {
-		o.hardware = hardware.New()
-	}
-
-	hardwareInfo, err := o.hardware.Info()
-	if err != nil {
-		return nil, err
-	}
-
-	log.G(o.ctx).Info("collected hardware info", zap.Any("hw", hardwareInfo))
-
-	cgroup, cGroupManager, err := makeCgroupManager(cfg.HubResources())
-	if err != nil {
-		return nil, err
-	}
-
-	if o.locatorClient == nil {
-		_, TLSConf, err := util.NewHitlessCertRotator(o.ctx, o.key)
+	if o.eth == nil {
+		eth, err := blockchain.NewAPI()
 		if err != nil {
-			return nil, errors.Wrap(err, "failed to create locator client")
+			return nil, err
 		}
 
-		locatorCC, err := xgrpc.NewWalletAuthenticatedClient(o.ctx, util.NewTLS(TLSConf), cfg.LocatorEndpoint())
+		o.eth = eth
+	}
+
+	if o.benchList == nil {
+		o.benchList, err = bm.NewBenchmarksList(o.ctx, cfg.Benchmarks)
 		if err != nil {
-			return nil, errors.Wrap(err, "failed to create locator client")
+			return nil, err
 		}
-
-		o.locatorClient = pb.NewLocatorClient(locatorCC)
 	}
 
-	// The rotator will be stopped by ctx
-	certRotator, TLSConf, err := util.NewHitlessCertRotator(o.ctx, o.key)
+	if o.dwh == nil {
+		o.dwh = dwh.NewDumbDWH(o.ctx)
+	}
+
+	cgName := ""
+	var cgRes *specs.LinuxResources
+	if cfg.Resources != nil {
+		cgName = cfg.Resources.Cgroup
+		cgRes = cfg.Resources.Resources
+	}
+
+	cgroup, cGroupManager, err := cgroups.NewCgroupManager(cgName, cgRes)
 	if err != nil {
 		return nil, err
 	}
 
-	hubEndpoint, err := o.getHubConnectionInfo(cfg)
+	hardwareInfo, err := hardware.NewHardware()
 	if err != nil {
 		return nil, err
 	}
 
-	creds := auth.NewWalletAuthenticator(util.NewTLS(TLSConf), hubEndpoint.EthAddress)
-	grpcServer := xgrpc.NewServer(log.GetLogger(o.ctx),
-		xgrpc.Credentials(creds),
-		xgrpc.DefaultTraceInterceptor(),
-	)
-
-	if !platformSupportCGroups && cfg.HubResources() != nil {
-		log.G(o.ctx).Warn("your platform does not support CGroup, but the config has resources section")
+	// check if memory is limited into cgroup
+	if s, err := cgroup.Stats(); err == nil {
+		if s.MemoryLimit < hardwareInfo.RAM.Device.Total {
+			hardwareInfo.RAM.Device.Available = s.MemoryLimit
+		}
+	} else {
+		hardwareInfo.RAM.Device.Available = hardwareInfo.RAM.Device.Total
 	}
 
 	if err := o.setupNetworkOptions(cfg); err != nil {
 		return nil, errors.Wrap(err, "failed to set up network options")
 	}
 
-	log.G(o.ctx).Info("discovered public IPs",
-		zap.Any("public IPs", o.publicIPs),
-		zap.Any("nat", o.nat))
+	log.G(o.ctx).Info("discovered public IPs", zap.Any("public IPs", o.publicIPs))
 
-	plugins, err := plugin.NewRepository(o.ctx, cfg.Plugins())
+	plugins, err := plugin.NewRepository(o.ctx, cfg.Plugins)
 	if err != nil {
 		return nil, err
 	}
+
+	// apply info about GPUs, expose to logs
+	plugins.ApplyHardwareInfo(hardwareInfo)
+	hardwareInfo.SetNetworkIncoming(o.publicIPs)
+
+	log.G(o.ctx).Info("collected hardware info", zap.Any("hw", hardwareInfo))
 
 	if o.ssh == nil {
 		o.ssh = nilSSH{}
 	}
 
-	ctx, cancel := context.WithCancel(o.ctx)
 	if o.ovs == nil {
-		o.ovs, err = NewOverseer(ctx, plugins)
+		o.ovs, err = NewOverseer(o.ctx, plugins)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	m = &Miner{
-		ctx:        ctx,
-		cancel:     cancel,
-		grpcServer: grpcServer,
-		ovs:        o.ovs,
+		ctx:    o.ctx,
+		cfg:    cfg,
+		ovs:    o.ovs,
+		ethkey: o.key,
 
 		plugins: plugins,
 
-		name:      o.uuid,
 		hardware:  hardwareInfo,
 		resources: resource.NewPool(hardwareInfo),
+		publicIPs: o.publicIPs,
 
-		publicIPs:  o.publicIPs,
-		natType:    o.nat,
-		hubAddress: hubEndpoint.Endpoint,
-
-		rl:             newReverseListener(1),
-		containers:     make(map[string]*ContainerInfo),
-		statusChannels: make(map[int]chan bool),
-		nameMapping:    make(map[string]string),
+		containers:  make(map[string]*ContainerInfo),
+		nameMapping: make(map[string]string),
 
 		controlGroup:  cgroup,
 		cGroupManager: cGroupManager,
 		ssh:           o.ssh,
-
-		connectedHubs: make(map[string]struct{}),
-
-		certRotator: certRotator,
-		creds:       creds,
+		state:         o.storage,
+		benchmarkList: o.benchList,
+		eth:           o.eth,
+		dwh:           o.dwh,
 	}
 
-	pb.RegisterMinerServer(grpcServer, m)
-	grpc_prometheus.Register(grpcServer)
+	if err := m.loadExternalState(); err != nil {
+		return nil, err
+	}
 
 	return m, nil
 }
@@ -274,13 +260,6 @@ func (m *Miner) GetContainerInfo(id string) (*ContainerInfo, bool) {
 	return info, ok
 }
 
-func (m *Miner) getTaskIdByContainerId(id string) (string, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	name, ok := m.nameMapping[id]
-	return name, ok
-}
-
 func (m *Miner) getContainerIdByTaskId(id string) (string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -299,54 +278,16 @@ func (m *Miner) deleteTaskMapping(id string) {
 	delete(m.nameMapping, id)
 }
 
-// Ping works as Healthcheck for the Hub
-func (m *Miner) Ping(ctx context.Context, _ *pb.Empty) (*pb.PingReply, error) {
-	log.G(m.ctx).Info("got ping request from Hub")
-	return &pb.PingReply{}, nil
+// Hardware returns Worker's hardware capabilities
+func (m *Miner) Hardware() *hardware.Hardware {
+	return m.hardware
 }
 
-// Info returns runtime statistics collected from all containers working on this miner.
-//
-// This works the following way: a miner periodically collects various runtime statistics from all
-// spawned containers that it knows about. For running containers metrics map the immediate
-// state, for dead containers - their last memento.
-func (m *Miner) Info(ctx context.Context, request *pb.Empty) (*pb.InfoReply, error) {
-	log.G(m.ctx).Info("handling Info request", zap.Any("req", request))
-
-	info, err := m.ovs.Info(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	var result = &pb.InfoReply{
-		Usage:        make(map[string]*pb.ResourceUsage),
-		Name:         m.name,
-		Capabilities: m.hardware.IntoProto(),
-	}
-
-	for containerID, stat := range info {
-		if id, ok := m.getTaskIdByContainerId(containerID); ok {
-			result.Usage[id] = stat.Marshal()
-		}
-	}
-
-	return result, nil
-}
-
-// Handshake is the first frame received from a Hub.
-//
-// This is a self representation about initial resources this Miner provides.
-// TODO: May be useful to register a channel to cover runtime resource changes.
-func (m *Miner) Handshake(ctx context.Context, request *pb.MinerHandshakeRequest) (*pb.MinerHandshakeReply, error) {
-	log.G(m.ctx).Info("handling Handshake request", zap.Any("req", request))
-
-	resp := &pb.MinerHandshakeReply{
-		Miner:        m.name,
-		Capabilities: m.hardware.IntoProto(),
-		NatType:      pb.NewNATType(m.natType),
-	}
-
-	return resp, nil
+// FreeDevice provides information about unallocated resources
+// that can be turned into ask-plans.
+func (m *Miner) FreeDevice() *hardware.Hardware {
+	// todo: this is stub, wait for Resource manager impl to use real data.
+	return m.hardware
 }
 
 func (m *Miner) scheduleStatusPurge(id string) {
@@ -375,12 +316,6 @@ func (m *Miner) setStatus(status *pb.TaskStatusReply, id string) {
 	if status.Status == pb.TaskStatusReply_BROKEN || status.Status == pb.TaskStatusReply_FINISHED {
 		go m.scheduleStatusPurge(id)
 	}
-	for _, ch := range m.statusChannels {
-		select {
-		case ch <- true:
-		case <-m.ctx.Done():
-		}
-	}
 }
 
 func (m *Miner) listenForStatus(statusListener chan pb.TaskStatusReply_Status, id string) {
@@ -405,7 +340,7 @@ func transformRestartPolicy(p *pb.ContainerRestartPolicy) container.RestartPolic
 	return restartPolicy
 }
 
-func (m *Miner) Load(stream pb.Miner_LoadServer) error {
+func (m *Miner) Load(stream pb.Hub_PushTaskServer) error {
 	log.G(m.ctx).Info("handling Load request")
 
 	result, err := m.ovs.Load(stream.Context(), newChunkReader(stream))
@@ -418,7 +353,7 @@ func (m *Miner) Load(stream pb.Miner_LoadServer) error {
 	return nil
 }
 
-func (m *Miner) Save(request *pb.SaveRequest, stream pb.Miner_SaveServer) error {
+func (m *Miner) Save(request *pb.SaveRequest, stream pb.Hub_PullTaskServer) error {
 	log.G(m.ctx).Info("handling Save request", zap.Any("request", request))
 
 	info, rd, err := m.ovs.Save(stream.Context(), request.ImageID)
@@ -452,6 +387,12 @@ func (m *Miner) Save(request *pb.SaveRequest, stream pb.Miner_SaveServer) error 
 func (m *Miner) Start(ctx context.Context, request *pb.MinerStartRequest) (*pb.MinerStartReply, error) {
 	log.G(m.ctx).Info("handling Start request", zap.Any("request", request))
 
+	// TODO(sshaman1101): check for deals existence in a right way;
+	// Note: orderID is dealID;
+	if _, err := m.GetDealByID(structs.DealID(request.GetOrderId())); err != nil {
+		return nil, err
+	}
+
 	if request.GetContainer() == nil {
 		return nil, fmt.Errorf("container field is required")
 	}
@@ -466,10 +407,11 @@ func (m *Miner) Start(ctx context.Context, request *pb.MinerStartRequest) (*pb.M
 		return nil, status.Errorf(codes.Unauthenticated, "invalid public key provided %v", err)
 	}
 
-	cgroup, resourceHandle, err := m.consume(request.GetOrderId(), resources)
+	cGroup, resourceHandle, err := m.consume(request.GetOrderId(), resources)
 	if err != nil {
 		return nil, status.Errorf(codes.ResourceExhausted, "failed to start %v", err)
 	}
+
 	// This can be canceled by using "resourceHandle.commit()".
 	defer resourceHandle.release()
 
@@ -482,25 +424,30 @@ func (m *Miner) Start(ctx context.Context, request *pb.MinerStartRequest) (*pb.M
 		mounts = append(mounts, mount)
 	}
 
+	networks, err := structs.NewNetworkSpecs(request.Container.Networks)
+	if err != nil {
+		log.G(ctx).Error("failed to parse networking specification", zap.Error(err))
+		m.setStatus(&pb.TaskStatusReply{Status: pb.TaskStatusReply_BROKEN}, request.Id)
+		return nil, status.Errorf(codes.Internal, "failed to parse networking specification - %s", err)
+	}
 	var d = Description{
 		Image:         request.Container.Image,
 		Registry:      request.Container.Registry,
 		Auth:          request.Container.Auth,
 		RestartPolicy: transformRestartPolicy(request.RestartPolicy),
-		Resources:     resources.ToContainerResources(cgroup.Suffix()),
+		Resources:     resources.ToContainerResources(cGroup.Suffix()),
 		DealId:        request.GetOrderId(),
 		TaskId:        request.Id,
 		CommitOnStop:  request.Container.CommitOnStop,
 		Env:           request.Container.Env,
-		GPURequired:   resources.RequiresGPU(),
 		volumes:       request.Container.Volumes,
 		mounts:        mounts,
+		networks:      networks,
 	}
 
 	// TODO: Detect whether it's the first time allocation. If so - release resources on error.
 
 	m.setStatus(&pb.TaskStatusReply{Status: pb.TaskStatusReply_SPOOLING}, request.Id)
-
 	log.G(m.ctx).Info("spooling an image")
 	if err := m.ovs.Spool(ctx, d); err != nil {
 		log.G(ctx).Error("failed to Spool an image", zap.Error(err))
@@ -521,8 +468,9 @@ func (m *Miner) Start(ctx context.Context, request *pb.MinerStartRequest) (*pb.M
 	containerInfo.ImageName = d.Image
 
 	var reply = pb.MinerStartReply{
-		Container: containerInfo.ID,
-		PortMap:   make(map[string]*pb.Endpoints, 0),
+		Container:  containerInfo.ID,
+		PortMap:    make(map[string]*pb.Endpoints, 0),
+		NetworkIDs: containerInfo.NetworkIDs,
 	}
 
 	for internalPort, portBindings := range containerInfo.Ports {
@@ -564,12 +512,13 @@ func (m *Miner) Start(ctx context.Context, request *pb.MinerStartRequest) (*pb.M
 	return &reply, nil
 }
 
-func (m *Miner) consume(orderId string, resources *structs.TaskResources) (cGroup, resourceHandle, error) {
+func (m *Miner) consume(orderId string, resources *structs.TaskResources) (cgroups.CGroup, resourceHandle, error) {
 	cgroup, err := m.cGroupManager.Attach(orderId, resources.ToCgroupResources())
-	if err != nil && err != errCgroupAlreadyExists {
+	if err != nil && err != cgroups.ErrCgroupAlreadyExists {
 		return nil, nil, err
 	}
-	if err != errCgroupAlreadyExists {
+
+	if err != cgroups.ErrCgroupAlreadyExists {
 		return cgroup, &nilResourceHandle{}, nil
 	}
 
@@ -614,59 +563,19 @@ func (m *Miner) Stop(ctx context.Context, request *pb.ID) (*pb.Empty, error) {
 	return &pb.Empty{}, nil
 }
 
-func (m *Miner) removeStatusChannel(idx int) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	delete(m.statusChannels, idx)
-}
-
-func (m *Miner) sendTasksStatus(server pb.Miner_TasksStatusServer) error {
-	result := &pb.StatusMapReply{Statuses: make(map[string]*pb.TaskStatusReply)}
+func (m *Miner) CollectTasksStatuses() map[string]*pb.TaskStatusReply {
+	result := map[string]*pb.TaskStatusReply{}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	for id, info := range m.containers {
-		result.Statuses[id] = info.status
+		result[id] = info.status
 	}
-
-	log.G(m.ctx).Info("sending result", zap.Any("info", m.containers), zap.Any("statuses", result.Statuses))
-
-	return server.Send(result)
-}
-
-func (m *Miner) sendUpdatesOnNotify(server pb.Miner_TasksStatusServer, ch chan bool) {
-	for {
-		select {
-		case <-ch:
-			err := m.sendTasksStatus(server)
-			if err != nil {
-				return
-			}
-		case <-m.ctx.Done():
-			return
-		}
-	}
-}
-
-func (m *Miner) sendUpdatesOnRequest(server pb.Miner_TasksStatusServer) {
-	for {
-		_, err := server.Recv()
-		if err != nil {
-			log.G(m.ctx).Info("tasks status server returned an error", zap.Error(err))
-			return
-		}
-		log.G(m.ctx).Debug("handling tasks status request")
-		err = m.sendTasksStatus(server)
-		if err != nil {
-			log.G(m.ctx).Info("failed to send status update", zap.Error(err))
-			return
-		}
-	}
+	return result
 }
 
 // TaskLogs returns logs from container
-func (m *Miner) TaskLogs(request *pb.TaskLogsRequest, server pb.Miner_TaskLogsServer) error {
+func (m *Miner) TaskLogs(request *pb.TaskLogsRequest, server pb.Hub_TaskLogsServer) error {
 	log.G(m.ctx).Info("handling TaskLogs request", zap.Any("request", request))
 	cid, ok := m.getContainerIdByTaskId(request.Id)
 	if !ok {
@@ -701,26 +610,18 @@ func (m *Miner) TaskLogs(request *pb.TaskLogsRequest, server pb.Miner_TaskLogsSe
 	}
 }
 
-func (m *Miner) DiscoverHub(ctx context.Context, request *pb.DiscoverHubRequest) (*pb.Empty, error) {
-	log.G(m.ctx).Info("discovered new hub", zap.String("address", request.Endpoint))
-	go m.connectToHub(request.Endpoint)
-	return &pb.Empty{}, nil
-}
-
-// TasksStatus returns the status of a task
-func (m *Miner) TasksStatus(server pb.Miner_TasksStatusServer) error {
-	log.G(m.ctx).Info("starting tasks status server")
-	m.mu.Lock()
-	ch := make(chan bool)
-	m.channelCounter++
-	m.statusChannels[m.channelCounter] = ch
-	defer m.removeStatusChannel(m.channelCounter)
-	m.mu.Unlock()
-
-	go m.sendUpdatesOnNotify(server, ch)
-	m.sendUpdatesOnRequest(server)
-
-	return nil
+//TODO: proper request
+func (m *Miner) JoinNetwork(ctx context.Context, req *pb.ID) (*pb.NetworkSpec, error) {
+	spec, err := m.plugins.JoinNetwork(req.Id)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.NetworkSpec{
+		Type:    spec.NetworkType(),
+		Options: spec.NetworkOptions(),
+		Subnet:  spec.NetworkCIDR(),
+		Addr:    spec.NetworkAddr(),
+	}, nil
 }
 
 func (m *Miner) TaskDetails(ctx context.Context, req *pb.ID) (*pb.TaskStatusReply, error) {
@@ -764,109 +665,393 @@ func (m *Miner) TaskDetails(ctx context.Context, req *pb.ID) (*pb.TaskStatusRepl
 	return reply, nil
 }
 
-func (m *Miner) connectToHub(address string) {
-	log.G(m.ctx).Info("connecting to hub", zap.String("address", address))
-	m.connectedHubsLock.Lock()
-	_, ok := m.connectedHubs[address]
-	if ok {
-		m.connectedHubsLock.Unlock()
-		log.G(m.ctx).Info("already connected to hub", zap.String("endpoint", address))
-		return
-	}
-	m.connectedHubs[address] = struct{}{}
-	m.connectedHubsLock.Unlock()
-	defer func() {
-		m.connectedHubsLock.Lock()
-		delete(m.connectedHubs, address)
-		m.connectedHubsLock.Unlock()
-	}()
-	// Connect to the Hub
-	var d = net.Dialer{
-		DualStack: true,
-		KeepAlive: 5 * time.Second,
-	}
-	conn, err := d.DialContext(m.ctx, "tcp", address)
-	if err != nil {
-		log.G(m.ctx).Error("failed to dial to the Hub", zap.String("addr", address), zap.Error(err))
-		return
-	}
-	defer conn.Close()
+func (m *Miner) RunSSH() error {
+	return m.ssh.Run()
+}
 
-	// Push the connection to a pool for grpcServer
-	if err = m.rl.enqueue(conn); err != nil {
-		log.G(m.ctx).Error("failed to enqueue yaConn for gRPC server", zap.Error(err))
-		return
+// RunBenchmarks perform benchmarking of Worker's resources.
+func (m *Miner) RunBenchmarks() error {
+	savedHardware := m.state.HardwareHash()
+	exitingHardware := m.hardware.Hash()
+
+	log.G(m.ctx).Debug("hardware hashes",
+		zap.String("saved", savedHardware),
+		zap.String("exiting", exitingHardware))
+
+	savedBenchmarks := m.state.PassedBenchmarks()
+	requiredBenchmarks := m.benchmarkList.List()
+
+	hwHashesMatched := exitingHardware == savedHardware
+	benchMatched := m.isBenchmarkListMatches(requiredBenchmarks, savedBenchmarks)
+
+	log.G(m.ctx).Debug("state matching",
+		zap.Bool("hwHashesMatched", hwHashesMatched),
+		zap.Bool("benchMatched", benchMatched))
+
+	if benchMatched && hwHashesMatched {
+		log.G(m.ctx).Debug("benchmarks list is matched, hardware is not changed, skip benchmarking this worker")
+		// return back previously measured results for hardware
+		m.hardware = m.state.HardwareWithBenchmarks()
+		return nil
 	}
 
-	// NOTE: it's not the best solution.
-	// It's needed to detect connection failure.
-	// Refactor: to detect reconnection from Accept
-	// Look at LimitListener
-	var zeroFrame = make([]byte, 0)
-	t := time.NewTicker(time.Second * 5)
-	defer t.Stop()
-	for {
-		select {
-		case <-t.C:
-			log.G(m.ctx).Info("check status of TCP connection to a Hub")
-			_, err := conn.Read(zeroFrame)
-			if err != nil {
-				return
+	passedBenchmarks := map[uint64]bool{}
+	for dev, benches := range requiredBenchmarks {
+		err := m.runBenchmarkGroup(dev, benches)
+		if err != nil {
+			return err
+		}
+
+		for _, b := range benches {
+			passedBenchmarks[b.GetID()] = true
+		}
+	}
+
+	if err := m.state.SetPassedBenchmarks(passedBenchmarks); err != nil {
+		return err
+	}
+
+	if err := m.state.SetHardwareWithBenchmarks(m.hardware); err != nil {
+		return err
+	}
+
+	return m.state.SetHardwareHash(m.hardware.Hash())
+}
+
+// isBenchmarkListMatches checks if already passed benchmarks is matches required benchmarks list.
+//
+// todo: test me
+func (m *Miner) isBenchmarkListMatches(required map[pb.DeviceType][]*pb.Benchmark, exiting map[uint64]bool) bool {
+	for _, benchs := range required {
+		for _, bench := range benchs {
+			if _, ok := exiting[bench.ID]; !ok {
+				return false
 			}
-			log.G(m.ctx).Info("connection to Hub is OK")
-		case <-m.ctx.Done():
-			return
 		}
 	}
+
+	return true
 }
 
-func (m *Miner) startSSH() {
-	switch err := m.ssh.Run(); err {
-	case nil, ssh.ErrServerClosed:
-		log.G(m.ctx).Info("ssh server closed", zap.Error(err))
+// runBenchmarkGroup executes group of benchmarks for given device type (CPU, GPU, Network, etc...).
+// The results must be attached to worker's hardware capabilities inside this function (by magic).
+func (m *Miner) runBenchmarkGroup(dev pb.DeviceType, benches []*pb.Benchmark) error {
+	switch dev {
+	case pb.DeviceType_DEV_CPU:
+		return m.runCPUBenchGroup(benches)
+	case pb.DeviceType_DEV_RAM:
+		return m.runRAMBenchGroup(benches)
+	case pb.DeviceType_DEV_GPU:
+		return m.runGPUBenchGroup(benches)
+	case pb.DeviceType_DEV_NETWORK:
+		return m.runNetworkBenchGroup(benches)
+	case pb.DeviceType_DEV_STORAGE:
+		return m.runStorageBenchGroup(benches)
 	default:
-		log.G(m.ctx).Error("failed to run SSH server", zap.Error(err))
-		m.cancel()
+		return fmt.Errorf("unknown benchmark group \"%s\"", dev.String())
 	}
 }
 
-func (m *Miner) startHubConnection() {
-	t := time.NewTicker(time.Second * 5)
-	defer t.Stop()
+func (m *Miner) runCPUBenchGroup(benches []*pb.Benchmark) error {
+	for _, ben := range benches {
+		// check for special cases
+		if ben.GetID() == bm.CPUCores {
+			m.hardware.CPU.Benchmarks[bm.CPUCores] = &pb.Benchmark{
+				ID:     bm.CPUCores,
+				Code:   ben.GetCode(),
+				Result: uint64(m.hardware.CPU.Device.Cores),
+			}
 
-	m.connectToHub(m.hubAddress)
-	for {
-		select {
-		case <-m.ctx.Done():
-			return
-		case <-t.C:
-			m.connectToHub(m.hubAddress)
+			continue
+		}
+
+		d := getDescriptionForBenchmark(ben)
+		d.Env[bm.CPUCountBenchParam] = fmt.Sprintf("%d", m.hardware.CPU.Device.Cores)
+
+		res, err := m.execBenchmarkContainer(ben, d)
+		if err != nil {
+			return err
+		}
+
+		// save benchmark resutls for current CPU unit
+		m.hardware.CPU.Benchmarks[ben.GetID()] = &pb.Benchmark{
+			ID:     ben.GetID(),
+			Code:   ben.GetCode(),
+			Result: res.Result,
 		}
 	}
+
+	return nil
 }
 
-// Serve starts discovery of Hubs,
-// accepts incoming connections from a Hub
-func (m *Miner) Serve() error {
-	go func() { m.startSSH() }()
-	go func() { m.startHubConnection() }()
-	go func() { m.grpcServer.Serve(m.rl) }()
+func (m *Miner) runRAMBenchGroup(benches []*pb.Benchmark) error {
+	for _, ben := range benches {
+		// special case, just copy available amount of mem as benchmark result.
+		if ben.GetID() == bm.RamSize {
+			b := &pb.Benchmark{
+				ID:     bm.RamSize,
+				Code:   ben.GetCode(),
+				Result: m.hardware.RAM.Device.Total,
+			}
 
-	<-m.ctx.Done()
-	return m.ctx.Err()
+			m.hardware.RAM.Benchmarks[bm.RamSize] = b
+			continue
+		}
+
+		d := getDescriptionForBenchmark(ben)
+		res, err := m.execBenchmarkContainer(ben, d)
+		if err != nil {
+			return err
+		}
+
+		m.hardware.RAM.Benchmarks[ben.GetID()] = &pb.Benchmark{
+			ID:     ben.GetID(),
+			Code:   ben.GetCode(),
+			Result: res.Result,
+		}
+		return nil
+	}
+
+	return nil
 }
+
+func (m *Miner) runGPUBenchGroup(benches []*pb.Benchmark) error {
+	for _, dev := range m.hardware.GPU {
+		for _, ben := range benches {
+			if ben.GetID() == bm.GPUCount {
+				dev.Benchmarks[bm.GPUCount] = &pb.Benchmark{
+					ID:     ben.GetID(),
+					Code:   ben.GetCode(),
+					Result: 1,
+				}
+				continue
+			}
+
+			if ben.GetID() == bm.GPUMem {
+				dev.Benchmarks[bm.GPUMem] = &pb.Benchmark{
+					ID:     ben.GetID(),
+					Code:   ben.GetCode(),
+					Result: dev.Device.Memory,
+				}
+				continue
+			}
+
+			d := getDescriptionForBenchmark(ben)
+			d.GPUDevices = []gpu.GPUID{gpu.GPUID(dev.GetDevice().GetID())}
+
+			res, err := m.execBenchmarkContainer(ben, d)
+			if err != nil {
+				return err
+			}
+
+			dev.Benchmarks[ben.GetID()] = &pb.Benchmark{
+				ID:     ben.GetID(),
+				Code:   ben.GetCode(),
+				Result: res.Result,
+			}
+		}
+	}
+
+	return nil
+}
+
+func (m *Miner) runNetworkBenchGroup(benches []*pb.Benchmark) error {
+	for _, ben := range benches {
+		d := getDescriptionForBenchmark(ben)
+		res, err := m.execBenchmarkContainer(ben, d)
+		if err != nil {
+			return err
+		}
+
+		m.hardware.Network.Benchmarks[ben.GetID()] = &pb.Benchmark{
+			ID:     ben.GetID(),
+			Code:   ben.GetCode(),
+			Result: res.Result,
+		}
+	}
+
+	return nil
+}
+
+func (m *Miner) runStorageBenchGroup(benches []*pb.Benchmark) error {
+	// note: there is no storage sub-system for worker yet, so benchmark always returns zero
+	for _, ben := range benches {
+		m.hardware.Storage.Benchmarks[ben.GetID()] = &pb.Benchmark{
+			ID:     ben.GetID(),
+			Code:   ben.GetCode(),
+			Result: 0,
+		}
+	}
+
+	return nil
+}
+
+// execBenchmarkContainerWithResults executes benchmark as docker image,
+// returns JSON output with measured values.
+func (m *Miner) execBenchmarkContainerWithResults(d Description) (map[string]*bm.ResultJSON, error) {
+	err := m.ovs.Spool(m.ctx, d)
+	if err != nil {
+		return nil, err
+	}
+
+	statusChan, statusReply, err := m.ovs.Start(m.ctx, d)
+	if err != nil {
+		return nil, fmt.Errorf("cannot start container with benchmark: %v", err)
+	}
+
+	logOpts := types.ContainerLogsOptions{ShowStdout: true}
+	reader, err := m.ovs.Logs(m.ctx, statusReply.ID, logOpts)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create container log reader: %v", err)
+	}
+	defer reader.Close()
+
+	stdoutBuf := bytes.Buffer{}
+	stderrBuf := bytes.Buffer{}
+	_, err = stdcopy.StdCopy(&stdoutBuf, &stderrBuf, reader)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read logs into buffer: %v", err)
+	}
+
+	resultsMap, err := parseBenchmarkResult(stdoutBuf.Bytes())
+	if err != nil {
+		return nil, fmt.Errorf("cannot parse benchmark result: %v", err)
+	}
+
+	<-statusChan
+	if err := m.ovs.Stop(m.ctx, statusReply.ID); err != nil {
+		log.G(m.ctx).Warn("cannot stop benchmark container", zap.Error(err))
+	}
+
+	return resultsMap, nil
+}
+
+func (m *Miner) execBenchmarkContainer(ben *pb.Benchmark, des Description) (*bm.ResultJSON, error) {
+	log.G(m.ctx).Debug("starting containered benchmark", zap.Any("benchmark", ben))
+	res, err := m.execBenchmarkContainerWithResults(des)
+	if err != nil {
+		return nil, err
+	}
+
+	log.G(m.ctx).Debug("received raw benchmark results",
+		zap.Uint64("bench_id", ben.GetID()),
+		zap.Any("result", res))
+
+	v, ok := res[ben.GetCode()]
+	if !ok {
+		return nil, fmt.Errorf("no results for benchmark id=%v found into container's output", ben.GetID())
+	}
+
+	return v, nil
+}
+
+func parseBenchmarkResult(data []byte) (map[string]*bm.ResultJSON, error) {
+	v := &bm.ContainerBenchmarkResultsJSON{}
+	err := json.Unmarshal(data, &v)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(v.Results) == 0 {
+		return nil, errors.New("results is empty")
+	}
+
+	return v.Results, nil
+}
+
+func getDescriptionForBenchmark(b *pb.Benchmark) Description {
+	return Description{
+		Image: b.GetImage(),
+		Env: map[string]string{
+			bm.BenchIDEnvParamName: fmt.Sprintf("%d", b.GetID()),
+		},
+	}
+}
+
+func (m *Miner) AskPlans(ctx context.Context) (*pb.AskPlansReply, error) {
+	log.G(m.ctx).Info("handling AskPlans request")
+	return &pb.AskPlansReply{AskPlans: m.state.AskPlans()}, nil
+}
+
+func (m *Miner) CreateAskPlan(ctx context.Context, request *pb.AskPlan) (string, error) {
+	log.G(m.ctx).Info("handling CreateAskPlan request", zap.Any("request", request))
+
+	return m.state.CreateAskPlan(request)
+}
+
+func (m *Miner) RemoveAskPlan(ctx context.Context, id string) error {
+	log.G(m.ctx).Info("handling RemoveAskPlan request", zap.String("id", id))
+
+	if err := m.state.RemoveAskPlan(id); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *Miner) GetDealByID(id structs.DealID) (*structs.DealMeta, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	deal, ok := m.Deals[id]
+	if !ok {
+		return nil, fmt.Errorf("deal with id=%s does not found", id)
+	}
+
+	return deal, nil
+}
+
+// loadExternalState loads external state into in-mem storage
+// (from blockchain, DWH, etc...). Must be called before
+// boltdb state is loaded.
+func (m *Miner) loadExternalState() error {
+	log.G(m.ctx).Debug("loading initial state from external sources")
+	if err := m.loadDeals(); err != nil {
+		return err
+	}
+
+	if err := m.syncAskPlans(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *Miner) loadDeals() error {
+	log.G(m.ctx).Debug("loading opened deals")
+
+	filter := dwh.DealsFilter{
+		Author: util.PubKeyToAddr(m.ethkey.PublicKey),
+	}
+
+	deals, err := m.dwh.GetDeals(m.ctx, filter)
+	if err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	for _, deal := range deals {
+		m.Deals[structs.DealID(deal.GetId())] = structs.NewDealMeta(deal)
+	}
+	m.mu.Unlock()
+
+	return nil
+}
+
+func (m *Miner) syncAskPlans() error {
+	log.G(m.ctx).Debug("synchronizing ask-plans with remote marketplace")
+	return nil
+}
+
+// todo: make the `miner.Init() error` method to kickstart all initial jobs for the Worker instance.
+// (state loading, benchmarking, market sync).
 
 // Close disposes all resources related to the Miner
 func (m *Miner) Close() {
 	log.G(m.ctx).Info("closing miner")
 
-	m.cancel()
-
-	m.grpcServer.Stop()
-	m.certRotator.Close()
 	m.ssh.Close()
 	m.ovs.Close()
-	m.rl.Close()
 	m.controlGroup.Delete()
 	m.plugins.Close()
 }

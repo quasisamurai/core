@@ -5,23 +5,35 @@ import (
 	"fmt"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
 	log "github.com/noxiouz/zapctx/ctxlog"
+	"github.com/sonm-io/core/insonmnia/hardware"
 	"github.com/sonm-io/core/insonmnia/miner/gpu"
+	minet "github.com/sonm-io/core/insonmnia/miner/network"
 	"github.com/sonm-io/core/insonmnia/miner/volume"
+	"github.com/sonm-io/core/insonmnia/structs"
 	"github.com/sonm-io/core/proto"
 	"go.uber.org/zap"
+)
+
+const (
+	bridgeNetwork = "bridge"
+	tincNetwork   = "tinc"
+	l2tpNetwork   = "l2tp"
 )
 
 // Provider unifies all possible providers for tuning.
 type Provider interface {
 	GPUProvider
 	VolumeProvider
+	NetworkProvider
 }
 
 // GPUProvider describes an interface for applying GPU settings to the
 // container.
 type GPUProvider interface {
-	GPU() bool
+	IsGPURequired() bool
+	GpuDeviceIDs() []gpu.GPUID
 }
 
 // VolumeProvider describes an interface for applying volumes to the container.
@@ -35,10 +47,15 @@ type VolumeProvider interface {
 	Mounts(source string) []volume.Mount
 }
 
+type NetworkProvider interface {
+	Networks() []structs.Network
+}
+
 // Repository describes a place where all SONM plugins for Docker live.
 type Repository struct {
-	volumes   map[string]volume.VolumeDriver
-	gpuTuners map[sonm.GPUVendorType]gpu.Tuner
+	volumes       map[string]volume.VolumeDriver
+	gpuTuners     map[sonm.GPUVendorType]gpu.Tuner
+	networkTuners map[string]minet.Tuner
 }
 
 // NewRepository constructs a new repository for SONM plugins from the
@@ -53,7 +70,7 @@ func NewRepository(ctx context.Context, cfg Config) (*Repository, error) {
 
 	log.G(ctx).Info("initializing SONM plugins")
 
-	for ty, options := range cfg.Volumes.Volumes {
+	for ty, options := range cfg.Volumes.Drivers {
 		log.G(ctx).Debug("initializing Volume plugin", zap.String("type", ty))
 
 		driver, err := volume.NewVolumeDriver(ctx, ty,
@@ -85,29 +102,58 @@ func NewRepository(ctx context.Context, cfg Config) (*Repository, error) {
 		r.gpuTuners[typeID] = tuner
 	}
 
+	if cfg.Overlay.Drivers.Tinc != nil {
+		tincTuner, err := minet.NewTincTuner(ctx, cfg.Overlay.Drivers.Tinc)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize tinc tuner - %v", err)
+		}
+		r.networkTuners[tincNetwork] = tincTuner
+	}
+
+	if cfg.Overlay.Drivers.L2TP != nil {
+		l2tpTuner, err := minet.NewL2TPTuner(ctx, cfg.Overlay.Drivers.L2TP)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize l2tp tuner - %v", err)
+		}
+		r.networkTuners[l2tpNetwork] = l2tpTuner
+	}
+
 	return r, nil
 }
 
 // EmptyRepository constructs an empty repository. Used primarily in tests.
 func EmptyRepository() *Repository {
 	return &Repository{
-		volumes:   make(map[string]volume.VolumeDriver),
-		gpuTuners: make(map[sonm.GPUVendorType]gpu.Tuner),
+		volumes:       make(map[string]volume.VolumeDriver),
+		gpuTuners:     make(map[sonm.GPUVendorType]gpu.Tuner),
+		networkTuners: make(map[string]minet.Tuner),
 	}
 }
 
-// Tune creates all plugin bound required for the given provider with further
-// host config tuning.
-func (r *Repository) Tune(provider Provider, cfg *container.HostConfig) (Cleanup, error) {
+// Tune creates all plugin bound required for the given provider with further host config tuning.
+func (r *Repository) Tune(provider Provider, hostCfg *container.HostConfig, netCfg *network.NetworkingConfig) (Cleanup, error) {
+	log.G(context.Background()).Info("tuning container")
 	// Do not specify GPU type right now,
 	// just check that GPU is required
-	if provider.GPU() {
-		if err := r.TuneGPU(provider, cfg); err != nil {
+	if provider.IsGPURequired() {
+		if err := r.TuneGPU(provider, hostCfg); err != nil {
 			return nil, err
 		}
 	}
+	cleanup := newNestedCleanup()
+	c, err := r.TuneVolumes(provider, hostCfg)
+	if err != nil {
+		return nil, err
+	}
+	cleanup.Add(c)
 
-	return r.TuneVolumes(provider, cfg)
+	c, err = r.TuneNetworks(provider, hostCfg, netCfg)
+	if err != nil {
+		cleanup.Close()
+		return nil, err
+	}
+	cleanup.Add(c)
+	return &cleanup, nil
 }
 
 // HasGPU returns true if the Repository has at least one GPU plugin loaded
@@ -115,12 +161,33 @@ func (r *Repository) HasGPU() bool {
 	return len(r.gpuTuners) > 0
 }
 
+func (r *Repository) collectGPUDevices() []*sonm.GPUDevice {
+	var devs []*sonm.GPUDevice
+	for _, tun := range r.gpuTuners {
+		devs = append(devs, tun.Devices()...)
+	}
+
+	return devs
+}
+
+// ApplyHardwareInfo exposing info about hardware units controlled by
+// various plugins.
+func (r *Repository) ApplyHardwareInfo(hw *hardware.Hardware) {
+	for _, dev := range r.collectGPUDevices() {
+		hw.GPU = append(hw.GPU, &sonm.GPU{
+			Device:     dev,
+			Benchmarks: make(map[uint64]*sonm.Benchmark),
+		})
+	}
+
+	hw.Network.Overlay = len(r.networkTuners) > 0
+}
+
 // TuneGPU creates GPU bound required for the given provider with further
 // host config tuning.
 func (r *Repository) TuneGPU(provider GPUProvider, cfg *container.HostConfig) error {
-
 	for _, tuner := range r.gpuTuners {
-		err := tuner.Tune(cfg)
+		err := tuner.Tune(cfg, provider.GpuDeviceIDs())
 		if err != nil {
 			return err
 		}
@@ -177,6 +244,35 @@ func (r *Repository) TuneVolumes(provider VolumeProvider, cfg *container.HostCon
 	}
 
 	return &cleanup, nil
+}
+
+func (r *Repository) TuneNetworks(provider NetworkProvider, hostCfg *container.HostConfig, netCfg *network.NetworkingConfig) (Cleanup, error) {
+	log.G(context.Background()).Info("tuning networks")
+	cleanup := newNestedCleanup()
+	networks := provider.Networks()
+	for _, net := range networks {
+		tuner, ok := r.networkTuners[net.NetworkType()]
+		if !ok {
+			cleanup.Close()
+			return nil, fmt.Errorf("network driver not supported: %s", net.NetworkType())
+		}
+		c, err := tuner.Tune(net, hostCfg, netCfg)
+		if err != nil {
+			cleanup.Close()
+			return nil, err
+		}
+		cleanup.Add(c)
+	}
+	return &cleanup, nil
+}
+
+func (r *Repository) JoinNetwork(ID string) (structs.Network, error) {
+	for _, net := range r.networkTuners {
+		if net.Tuned(ID) {
+			return net.GenerateInvitation(ID)
+		}
+	}
+	return nil, fmt.Errorf("no such network %s", ID)
 }
 
 func (r *Repository) Close() error {
