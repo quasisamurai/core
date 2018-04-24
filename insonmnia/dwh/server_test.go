@@ -8,7 +8,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/golang/mock/gomock"
@@ -16,40 +15,74 @@ import (
 	"github.com/pkg/errors"
 	bch "github.com/sonm-io/core/blockchain"
 	pb "github.com/sonm-io/core/proto"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
 const (
-	testDBPath = "dwh.db"
+	testDBPath        = "test_dwh.db"
+	testMonitorDBPath = "test_monitor_dwh.db"
 )
 
 var (
-	w *DWH
+	globalDWH  *DWH
+	monitorDWH *DWH
 )
 
 func TestMain(m *testing.M) {
 	var err error
-	w, err = getTestDWH()
+	globalDWH, err = getTestDWH(testDBPath)
 	if err != nil {
 		fmt.Println(err)
 		os.Remove(testDBPath)
 		os.Exit(1)
 	}
 
+	monitorDWH, err = getTestDWH(testMonitorDBPath)
+	if err != nil {
+		fmt.Println(err)
+		os.Remove(testMonitorDBPath)
+		os.Exit(1)
+	}
+
 	retCode := m.Run()
-	w.db.Close()
+	globalDWH.db.Close()
 	os.Remove(testDBPath)
+	os.Remove(testMonitorDBPath)
 	os.Exit(retCode)
 }
 
+func getTestDWH(dbPath string) (*DWH, error) {
+	var (
+		ctx = context.Background()
+		cfg = &Config{
+			Storage: &storageConfig{
+				Backend:  "sqlite3",
+				Endpoint: dbPath,
+			},
+		}
+	)
+	w := &DWH{
+		ctx:      ctx,
+		cfg:      cfg,
+		logger:   log.GetLogger(ctx),
+		commands: sqliteCommands,
+	}
+
+	return w, setupTestDB(w)
+}
+
 func TestDWH_GetDeals(t *testing.T) {
+	globalDWH.mu.Lock()
+	defer globalDWH.mu.Unlock()
+
 	// Test TEXT columns.
 	{
 		request := &pb.DealsRequest{
-			Status:     pb.MarketDealStatus_MARKET_STATUS_UNKNOWN,
+			Status:     pb.DealStatus_DEAL_UNKNOWN,
 			SupplierID: "supplier_5",
 		}
-		reply, err := w.GetDeals(context.Background(), request)
+		reply, err := globalDWH.getDeals(context.Background(), request)
 
 		if err != nil {
 			t.Errorf("Request `%+v` failed: %s", request, err)
@@ -61,21 +94,21 @@ func TestDWH_GetDeals(t *testing.T) {
 			return
 		}
 
-		if reply.Deals[0].SupplierID != "supplier_5" {
+		if reply.Deals[0].GetDeal().SupplierID != "supplier_5" {
 			t.Errorf("Request `%+v` failed, expected %d, got %d (SupplierID)",
-				request, 10015, reply.Deals[0].Duration)
+				request, 10015, reply.Deals[0].GetDeal().Duration)
 			return
 		}
 	}
 	// Test INTEGER columns.
 	{
 		request := &pb.DealsRequest{
-			Status: pb.MarketDealStatus_MARKET_STATUS_UNKNOWN,
+			Status: pb.DealStatus_DEAL_UNKNOWN,
 			Duration: &pb.MaxMinUint64{
 				Min: 10015,
 			},
 		}
-		reply, err := w.GetDeals(context.Background(), request)
+		reply, err := globalDWH.getDeals(context.Background(), request)
 
 		if err != nil {
 			t.Errorf("Request `%+v` failed: %s", request, err)
@@ -90,12 +123,12 @@ func TestDWH_GetDeals(t *testing.T) {
 	// Test TEXT columns which should be treated as INTEGERS.
 	{
 		request := &pb.DealsRequest{
-			Status: pb.MarketDealStatus_MARKET_STATUS_UNKNOWN,
+			Status: pb.DealStatus_DEAL_UNKNOWN,
 			Price: &pb.MaxMinBig{
 				Min: pb.NewBigIntFromInt(20015),
 			},
 		}
-		reply, err := w.GetDeals(context.Background(), request)
+		reply, err := globalDWH.getDeals(context.Background(), request)
 
 		if err != nil {
 			t.Errorf("Request `%+v` failed: %s", request, err)
@@ -107,21 +140,25 @@ func TestDWH_GetDeals(t *testing.T) {
 			return
 		}
 
-		if reply.Deals[0].Price.Unwrap().String() != "20015" {
+		if reply.Deals[0].GetDeal().Price.Unwrap().String() != "20015" {
 			t.Errorf("Request `%+v` failed, expected %d, got %d (Price)",
-				request, 10015, reply.Deals[0].Duration)
+				request, 10015, reply.Deals[0].GetDeal().Duration)
 			return
 		}
 	}
 }
 
 func TestDWH_GetDealDetails(t *testing.T) {
-	reply, err := w.GetDealDetails(context.Background(), &pb.ID{Id: "id_5"})
+	globalDWH.mu.Lock()
+	defer globalDWH.mu.Unlock()
+
+	deal, err := globalDWH.getDealDetails(context.Background(), &pb.ID{Id: "id_5"})
 	if err != nil {
 		t.Error(err)
 		return
 	}
 
+	reply := deal.GetDeal()
 	if reply.Id != "id_5" {
 		t.Errorf("Expected %s, got %s (Id)", "id_5", reply.Id)
 	}
@@ -161,22 +198,25 @@ func TestDWH_GetDealDetails(t *testing.T) {
 	if reply.LastBillTS.Seconds != 70015 {
 		t.Errorf("Expected %d, got %d (LastBillTS)", 70015, reply.LastBillTS.Seconds)
 	}
-	if !reply.ActiveChangeRequest {
-		t.Errorf("Expected %t, got %t (ActiveChangeRequest)", true, reply.ActiveChangeRequest)
+	if !deal.ActiveChangeRequest {
+		t.Errorf("Expected %t, got %t (ActiveChangeRequest)", true, deal.ActiveChangeRequest)
 	}
-	if string(reply.SupplierCertificates) != string([]byte{1, 2}) {
-		t.Errorf("Expected %s, got %s (SupplierCertificates)", string([]byte{1, 2}), reply.SupplierCertificates)
+	if string(deal.SupplierCertificates) != string([]byte{1, 2}) {
+		t.Errorf("Expected %s, got %s (SupplierCertificates)", string([]byte{1, 2}), deal.SupplierCertificates)
 	}
 }
 
 func TestDWH_GetOrders(t *testing.T) {
+	globalDWH.mu.Lock()
+	defer globalDWH.mu.Unlock()
+
 	// Test TEXT columns.
 	{
 		request := &pb.OrdersRequest{
-			Type:   pb.MarketOrderType_MARKET_ANY,
+			Type:   pb.OrderType_ANY,
 			DealID: "deal_id_5",
 		}
-		reply, err := w.GetOrders(context.Background(), request)
+		reply, err := globalDWH.getOrders(context.Background(), request)
 
 		if err != nil {
 			t.Errorf("Request `%+v` failed: %s", request, err)
@@ -188,16 +228,16 @@ func TestDWH_GetOrders(t *testing.T) {
 			return
 		}
 
-		if reply.Orders[0].AuthorID != "ask_author" {
+		if reply.Orders[0].GetOrder().AuthorID != "ask_author" {
 			t.Errorf("Request `%+v` failed, expected %s, got %s (AuthorID)",
-				request, "ask_author", reply.Orders[0].AuthorID)
+				request, "ask_author", reply.Orders[0].GetOrder().AuthorID)
 			return
 		}
 	}
 	// Test INTEGER columns.
 	{
 		request := &pb.OrdersRequest{
-			Type: pb.MarketOrderType_MARKET_ASK,
+			Type: pb.OrderType_ASK,
 			Duration: &pb.MaxMinUint64{
 				Min: 10015,
 			},
@@ -207,7 +247,7 @@ func TestDWH_GetOrders(t *testing.T) {
 				},
 			},
 		}
-		reply, err := w.GetOrders(context.Background(), request)
+		reply, err := globalDWH.getOrders(context.Background(), request)
 
 		if err != nil {
 			t.Errorf("Request `%+v` failed: %s", request, err)
@@ -219,21 +259,21 @@ func TestDWH_GetOrders(t *testing.T) {
 			return
 		}
 
-		if reply.Orders[0].Duration != uint64(10015) {
+		if reply.Orders[0].GetOrder().Duration != uint64(10015) {
 			t.Errorf("Request `%+v` failed, expected %d, got %d (Duration)",
-				request, 10015, reply.Orders[0].Duration)
+				request, 10015, reply.Orders[0].GetOrder().Duration)
 			return
 		}
 	}
 	// Test TEXT columns which should be treated as INTEGERS.
 	{
 		request := &pb.OrdersRequest{
-			Type: pb.MarketOrderType_MARKET_ASK,
+			Type: pb.OrderType_ASK,
 			Price: &pb.MaxMinBig{
 				Min: pb.NewBigIntFromInt(int64(20015)),
 			},
 		}
-		reply, err := w.GetOrders(context.Background(), request)
+		reply, err := globalDWH.getOrders(context.Background(), request)
 
 		if err != nil {
 			t.Errorf("Request `%+v` failed: %s", request, err)
@@ -245,19 +285,22 @@ func TestDWH_GetOrders(t *testing.T) {
 			return
 		}
 
-		if reply.Orders[0].Price.Unwrap().String() != "20015" {
+		if reply.Orders[0].GetOrder().Price.Unwrap().String() != "20015" {
 			t.Errorf("Request `%+v` failed, expected %d, got %d (Price)",
-				request, 10015, reply.Orders[0].Duration)
+				request, 10015, reply.Orders[0].GetOrder().Duration)
 			return
 		}
 	}
 }
 
 func TestDWH_GetMatchingOrders(t *testing.T) {
+	globalDWH.mu.Lock()
+	defer globalDWH.mu.Unlock()
+
 	request := &pb.MatchingOrdersRequest{
 		Id: &pb.ID{Id: "ask_id_5"},
 	}
-	reply, err := w.GetMatchingOrders(context.Background(), request)
+	reply, err := globalDWH.getMatchingOrders(context.Background(), request)
 	if err != nil {
 		t.Errorf("GetMatchingOrders failed: %s", err)
 		return
@@ -270,12 +313,16 @@ func TestDWH_GetMatchingOrders(t *testing.T) {
 }
 
 func TestDWH_GetOrderDetails(t *testing.T) {
-	reply, err := w.GetOrderDetails(context.Background(), &pb.ID{Id: "ask_id_5"})
+	globalDWH.mu.Lock()
+	defer globalDWH.mu.Unlock()
+
+	order, err := globalDWH.getOrderDetails(context.Background(), &pb.ID{Id: "ask_id_5"})
 	if err != nil {
 		t.Error(err)
 		return
 	}
 
+	reply := order.GetOrder()
 	if reply.Id != "ask_id_5" {
 		t.Errorf("Expected %s, got %s (Id)", "ask_id_5", reply.Id)
 	}
@@ -309,7 +356,10 @@ func TestDWH_GetOrderDetails(t *testing.T) {
 }
 
 func TestDWH_GetDealChangeRequests(t *testing.T) {
-	reply, err := w.GetDealChangeRequests(context.Background(), &pb.ID{Id: "id_0"})
+	globalDWH.mu.Lock()
+	defer globalDWH.mu.Unlock()
+
+	reply, err := globalDWH.getDealChangeRequests(context.Background(), &pb.ID{Id: "id_0"})
 	if err != nil {
 		t.Error(err)
 		return
@@ -321,21 +371,164 @@ func TestDWH_GetDealChangeRequests(t *testing.T) {
 	}
 }
 
+func TestDWH_GetProfiles(t *testing.T) {
+	globalDWH.mu.Lock()
+	defer globalDWH.mu.Unlock()
+
+	reply, err := globalDWH.getProfiles(globalDWH.ctx, &pb.ProfilesRequest{
+		Name: "sortedProfile",
+		Sortings: []*pb.SortingOption{
+			{
+				Field: "UserID",
+				Order: pb.SortingOrder_Asc,
+			},
+		},
+	})
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	if len(reply.Profiles) != 10 {
+		t.Errorf("Expected %d Profiles, got %d", 10, len(reply.Profiles))
+		return
+	}
+
+	if reply.Profiles[0].UserID != "test_profile_0" {
+		t.Errorf("Expected %s, got %s (Profile.UserID)", "test_profile_0", reply.Profiles[0].UserID)
+		return
+	}
+
+	reply, err = globalDWH.getProfiles(globalDWH.ctx, &pb.ProfilesRequest{
+		Name: "sortedProfile",
+		Sortings: []*pb.SortingOption{
+			{
+				Field: "UserID",
+				Order: pb.SortingOrder_Desc,
+			},
+		},
+	})
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	if len(reply.Profiles) != 10 {
+		t.Errorf("Expected %d Profiles, got %d", 10, len(reply.Profiles))
+		return
+	}
+
+	if reply.Profiles[0].UserID != "test_profile_9" {
+		t.Errorf("Expected %s, got %s (Profile.UserID)", "test_profile_9", reply.Profiles[0].UserID)
+		return
+	}
+
+	reply, err = globalDWH.getProfiles(globalDWH.ctx, &pb.ProfilesRequest{
+		Name: "sortedProfile",
+		Sortings: []*pb.SortingOption{
+			{
+				Field: "IdentityLevel",
+				Order: pb.SortingOrder_Asc,
+			},
+			{
+				Field: "UserID",
+				Order: pb.SortingOrder_Asc,
+			},
+		},
+	})
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	if len(reply.Profiles) != 10 {
+		t.Errorf("Expected %d Profiles, got %d", 10, len(reply.Profiles))
+		return
+	}
+
+	if reply.Profiles[0].UserID != "test_profile_0" {
+		t.Errorf("Expected %s, got %s (Profile.UserID)", "test_profile_0", reply.Profiles[0].UserID)
+		return
+	}
+	if reply.Profiles[4].UserID != "test_profile_8" {
+		t.Errorf("Expected %s, got %s (Profile.UserID)", "test_profile_8", reply.Profiles[4].UserID)
+		return
+	}
+
+	reply, err = globalDWH.getProfiles(globalDWH.ctx, &pb.ProfilesRequest{
+		BlacklistQuery: &pb.BlacklistQuery{
+			OwnerID: "blacklisting_user",
+			Option:  pb.BlacklistOption_OnlyMatching,
+		},
+	})
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	if len(reply.Profiles) != 1 {
+		t.Errorf("Expected %d Profiles, got %d", 1, len(reply.Profiles))
+		return
+	}
+
+	reply, err = globalDWH.getProfiles(globalDWH.ctx, &pb.ProfilesRequest{
+		BlacklistQuery: &pb.BlacklistQuery{
+			OwnerID: "blacklisting_user",
+			Option:  pb.BlacklistOption_WithoutMatching,
+		},
+	})
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	if len(reply.Profiles) != 11 {
+		t.Errorf("Expected %d Profiles, got %d", 11, len(reply.Profiles))
+		return
+	}
+
+	reply, err = globalDWH.getProfiles(globalDWH.ctx, &pb.ProfilesRequest{
+		BlacklistQuery: &pb.BlacklistQuery{
+			OwnerID: "blacklisting_user",
+			Option:  pb.BlacklistOption_IncludeAndMark,
+		},
+	})
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	if len(reply.Profiles) != 12 {
+		t.Errorf("Expected %d Profiles, got %d", 12, len(reply.Profiles))
+		return
+	}
+
+	var foundMarkedProfile bool
+	for _, profile := range reply.Profiles {
+		if profile.IsBlacklisted {
+			foundMarkedProfile = true
+		}
+	}
+
+	if !foundMarkedProfile {
+		t.Error("failed to find profile marked as blacklisted")
+	}
+}
+
 func TestDWH_monitor(t *testing.T) {
 	var (
 		controller           = gomock.NewController(t)
 		mockBlock            = bch.NewMockAPI(controller)
-		events               = make(chan *bch.Event, 5)
 		commonID             = big.NewInt(0xDEADBEEF)
 		commonEventTS uint64 = 5
 	)
-	defer close(events)
 
-	mockBlock.EXPECT().GetEvents(gomock.Any(), gomock.Any()).AnyTimes().Return(events, nil)
+	benchmarks, err := pb.NewBenchmarks([]uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11})
+	require.NoError(t, err)
 
-	deal := &pb.MarketDeal{
+	deal := &pb.Deal{
 		Id:             commonID.String(),
-		Benchmarks:     []uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+		Benchmarks:     benchmarks,
 		SupplierID:     "0x8125721C2413d99a33E351e1F6Bb4e56b6b633FE",
 		ConsumerID:     "consumer_id",
 		MasterID:       "master_id",
@@ -345,27 +538,27 @@ func TestDWH_monitor(t *testing.T) {
 		Price:          pb.NewBigInt(big.NewInt(20010)),
 		StartTime:      &pb.Timestamp{Seconds: 30010},
 		EndTime:        &pb.Timestamp{Seconds: 40010},
-		Status:         pb.MarketDealStatus_MARKET_STATUS_ACCEPTED,
+		Status:         pb.DealStatus_DEAL_ACCEPTED,
 		BlockedBalance: pb.NewBigInt(big.NewInt(50010)),
 		TotalPayout:    pb.NewBigInt(big.NewInt(0)),
 		LastBillTS:     &pb.Timestamp{Seconds: 70010},
 	}
 	mockBlock.EXPECT().GetDealInfo(gomock.Any(), gomock.Any()).AnyTimes().Return(deal, nil)
 
-	order := &pb.MarketOrder{
+	order := &pb.Order{
 		Id:             commonID.String(),
 		DealID:         "",
-		OrderType:      pb.MarketOrderType_MARKET_ASK,
-		OrderStatus:    pb.MarketOrderStatus_MARKET_ORDER_ACTIVE,
+		OrderType:      pb.OrderType_ASK,
+		OrderStatus:    pb.OrderStatus_ORDER_ACTIVE,
 		AuthorID:       "0x8125721C2413d99a33E351e1F6Bb4e56b6b633FE",
 		CounterpartyID: "counterparty_id",
 		Duration:       10020,
 		Price:          pb.NewBigInt(big.NewInt(20010)),
 		Netflags:       7,
-		IdentityLevel:  pb.MarketIdentityLevel_MARKET_ANONIMOUS,
+		IdentityLevel:  pb.IdentityLevel_ANONIMOUS,
 		Blacklist:      "blacklist",
 		Tag:            []byte{0, 1},
-		Benchmarks:     []uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+		Benchmarks:     benchmarks,
 		FrozenSum:      pb.NewBigInt(big.NewInt(30010)),
 	}
 	mockBlock.EXPECT().GetOrderInfo(gomock.Any(), gomock.Any()).AnyTimes().Return(order, nil)
@@ -373,10 +566,10 @@ func TestDWH_monitor(t *testing.T) {
 	changeRequest := &pb.DealChangeRequest{
 		Id:          "0",
 		DealID:      commonID.String(),
-		RequestType: pb.MarketOrderType_MARKET_ASK,
+		RequestType: pb.OrderType_ASK,
 		Duration:    10020,
 		Price:       pb.NewBigInt(big.NewInt(20010)),
-		Status:      pb.MarketChangeRequestStatus_REQUEST_CREATED,
+		Status:      pb.ChangeRequestStatus_REQUEST_CREATED,
 	}
 	mockBlock.EXPECT().GetDealChangeRequestInfo(gomock.Any(), gomock.Any()).AnyTimes().Return(changeRequest, nil)
 
@@ -396,50 +589,54 @@ func TestDWH_monitor(t *testing.T) {
 	mockBlock.EXPECT().GetCertificate(gomock.Any(), gomock.Any()).AnyTimes().Return(
 		certificate, nil)
 
-	w.blockchain = mockBlock
-	go w.monitorBlockchain()
+	monitorDWH.blockchain = mockBlock
 
 	// Test onOrderPlaced event handling.
-	events <- &bch.Event{Data: &bch.OrderPlacedData{ID: commonID}, TS: commonEventTS}
-	time.Sleep(time.Millisecond * 200)
-	if order, err := w.GetOrderDetails(context.Background(), &pb.ID{Id: commonID.String()}); err != nil {
+	if err := monitorDWH.onOrderPlaced(commonEventTS, commonID); err != nil {
+		t.Error(err)
+		return
+	}
+	if order, err := monitorDWH.getOrderDetails(context.Background(), &pb.ID{Id: commonID.String()}); err != nil {
 		t.Errorf("Failed to GetOrderDetails: %s", err)
 		return
 	} else {
-		if order.Duration != 10020 {
-			t.Errorf("Expected %d, got %d (Order.Duration)", 10020, order.Duration)
+		if order.GetOrder().Duration != 10020 {
+			t.Errorf("Expected %d, got %d (Order.Duration)", 10020, order.GetOrder().Duration)
 		}
 	}
 
 	// Test onDealOpened event handling.
-	events <- &bch.Event{Data: &bch.DealOpenedData{ID: commonID}, TS: commonEventTS}
-	time.Sleep(time.Millisecond * 200)
+	if err := monitorDWH.onDealOpened(commonID); err != nil {
+		t.Error(err)
+		return
+	}
 	// Firstly, check that a deal was created.
-	if deal, err := w.GetDealDetails(context.Background(), &pb.ID{Id: commonID.String()}); err != nil {
+	if deal, err := monitorDWH.getDealDetails(context.Background(), &pb.ID{Id: commonID.String()}); err != nil {
 		t.Errorf("Failed to GetDealDetails: %s", err)
 		return
 	} else {
-		if deal.Duration != 10020 {
-			t.Errorf("Expected %d, got %d (Deal.Duration)", 10020, deal.Duration)
+		if deal.GetDeal().Duration != 10020 {
+			t.Errorf("Expected %d, got %d (Deal.Duration)", 10020, deal.GetDeal().Duration)
 		}
 	}
 	// Secondly, check that a DealCondition was created.
-	if dealConditions, err := getDealConditions(t); err != nil {
-		t.Errorf("Failed to getDealConditions: %s", err)
+	if dealConditionsReply, err := monitorDWH.getDealConditions(
+		monitorDWH.ctx, &pb.DealConditionsRequest{DealID: commonID.String()}); err != nil {
+		t.Errorf("Failed to GetDealConditions: %s", err)
 		return
 	} else {
-		if dealConditions[0].Duration != 10020 {
+		if dealConditionsReply.Conditions[0].Duration != 10020 {
 			t.Errorf("Expected %d, got %d (DealCondition.Duration)", 10020, deal.Duration)
 			return
 		}
 	}
 
 	// Test that a Validator entry is added after ValidatorCreated event.
-	events <- &bch.Event{Data: &bch.ValidatorCreatedData{
-		ID: common.HexToAddress("0x8125721C2413d99a33E351e1F6Bb4e56b6b633FD"),
-	}, TS: commonEventTS}
-	time.Sleep(time.Millisecond * 200)
-	if validatorsReply, err := w.GetValidators(w.ctx, &pb.ValidatorsRequest{}); err != nil {
+	if err := monitorDWH.onValidatorCreated(common.HexToAddress("0x8125721C2413d99a33E351e1F6Bb4e56b6b633FD")); err != nil {
+		t.Error(err)
+		return
+	}
+	if validatorsReply, err := monitorDWH.getValidators(monitorDWH.ctx, &pb.ValidatorsRequest{}); err != nil {
 		t.Errorf("Failed to GetValidators: %s", err)
 		return
 	} else {
@@ -455,10 +652,11 @@ func TestDWH_monitor(t *testing.T) {
 
 	validator.Level = 0
 	// Test that a Validator entry is updated after ValidatorDeleted event.
-	events <- &bch.Event{Data: &bch.ValidatorDeletedData{
-		ID: common.HexToAddress("0x8125721C2413d99a33E351e1F6Bb4e56b6b633FD")}, TS: commonEventTS}
-	time.Sleep(time.Millisecond * 200)
-	if validatorsReply, err := w.GetValidators(w.ctx, &pb.ValidatorsRequest{}); err != nil {
+	if err := monitorDWH.onValidatorDeleted(common.HexToAddress("0x8125721C2413d99a33E351e1F6Bb4e56b6b633FD")); err != nil {
+		t.Error(err)
+		return
+	}
+	if validatorsReply, err := monitorDWH.getValidators(monitorDWH.ctx, &pb.ValidatorsRequest{}); err != nil {
 		t.Errorf("Failed to GetValidators: %s", err)
 		return
 	} else {
@@ -473,11 +671,11 @@ func TestDWH_monitor(t *testing.T) {
 	}
 
 	// Test that a Certificate entry is updated after CertificateCreated event.
-	events <- &bch.Event{Data: &bch.CertificateCreatedData{
-		ID: commonID,
-	}, TS: commonEventTS}
-	time.Sleep(time.Millisecond * 200)
-	if certificateAttrs, err := getCertificates(t); err != nil {
+	if err := monitorDWH.onCertificateCreated(commonID); err != nil {
+		t.Error(err)
+		return
+	}
+	if certificateAttrs, err := getCertificates(monitorDWH); err != nil {
 		t.Errorf("Failed to getValidators: %s", err)
 		return
 	} else {
@@ -491,48 +689,51 @@ func TestDWH_monitor(t *testing.T) {
 				"User Name", certificateAttrs[0].Value)
 		}
 	}
-	if profiles, err := getProfiles(t); err != nil {
+	if profilesReply, err := monitorDWH.getProfiles(monitorDWH.ctx, &pb.ProfilesRequest{}); err != nil {
 		t.Errorf("Failed to getProfiles: %s", err)
 		return
 	} else {
-		if len(profiles) != 1 {
+		if len(profilesReply.Profiles) != 13 {
 			t.Errorf("(CertificateCreated) Expected 1 Profile, got %d",
-				len(profiles))
+				len(profilesReply.Profiles))
 			return
 		}
-		if profiles[0].Name != "User Name" {
+		if profilesReply.Profiles[12].Name != "User Name" {
 			t.Errorf("(CertificateCreated) Expected %s, got %s (Profile.Name)",
-				"User Name", profiles[0].Name)
+				"User Name", profilesReply.Profiles[12].Name)
 		}
 	}
 
 	certificate.Attribute = CertificateCountry
 	certificate.Value = []byte("Country")
 	// Test that a  Profile entry is updated after CertificateCreated event.
-	events <- &bch.Event{Data: &bch.CertificateCreatedData{
-		ID: commonID,
-	}, TS: commonEventTS}
-	time.Sleep(time.Millisecond * 200)
-	if profiles, err := getProfiles(t); err != nil {
+	if err := monitorDWH.onCertificateCreated(commonID); err != nil {
+		t.Error(err)
+		return
+	}
+	if profilesReply, err := monitorDWH.getProfiles(monitorDWH.ctx, &pb.ProfilesRequest{}); err != nil {
 		t.Errorf("Failed to getProfiles: %s", err)
 		return
 	} else {
-		if len(profiles) != 1 {
+		if len(profilesReply.Profiles) != 13 {
 			t.Errorf("(CertificateCreated) Expected 1 Profile, got %d",
-				len(profiles))
+				len(profilesReply.Profiles))
 			return
 		}
-		if profiles[0].Country != "Country" {
+
+		profiles := profilesReply.Profiles
+
+		if profiles[12].Country != "Country" {
 			t.Errorf("(CertificateCreated) Expected %s, got %s (Profile.Country)",
-				"Country", profiles[0].Name)
+				"Country", profiles[12].Name)
 		}
-		if profiles[0].Name != "User Name" {
+		if profiles[12].Name != "User Name" {
 			t.Errorf("(CertificateCreated) Expected %s, got %s (Profile.Name)",
-				"Name", profiles[0].Name)
+				"Name", profiles[12].Name)
 		}
 
 		var certificates []*pb.Certificate
-		if err := json.Unmarshal(profiles[0].Certificates, &certificates); err != nil {
+		if err := json.Unmarshal(profiles[12].Certificates, &certificates); err != nil {
 			t.Errorf("(CertificateCreated) Failed to unmarshal Profile.Certificates: %s", err)
 			return
 		} else {
@@ -543,9 +744,8 @@ func TestDWH_monitor(t *testing.T) {
 			}
 		}
 	}
-
 	// Check that profile updates resulted in orders updates.
-	dwhOrder, err := w.getOrderDetails(context.Background(), &pb.ID{Id: commonID.String()})
+	dwhOrder, err := monitorDWH.getOrderDetails(context.Background(), &pb.ID{Id: commonID.String()})
 	if err != nil {
 		t.Errorf("failed to getOrderDetails (`%s`): %s", commonID.String(), err)
 		return
@@ -557,7 +757,7 @@ func TestDWH_monitor(t *testing.T) {
 	}
 
 	// Check that profile updates resulted in orders updates.
-	if deal, err := w.GetDealDetails(context.Background(), &pb.ID{Id: commonID.String()}); err != nil {
+	if deal, err := monitorDWH.getDealDetails(context.Background(), &pb.ID{Id: commonID.String()}); err != nil {
 		t.Errorf("Failed to GetDealDetails: %s", err)
 		return
 	} else {
@@ -567,30 +767,36 @@ func TestDWH_monitor(t *testing.T) {
 	}
 
 	// Test that if order is updated, it is deleted.
-	events <- &bch.Event{Data: &bch.OrderUpdatedData{ID: commonID}, TS: commonEventTS}
-	time.Sleep(time.Millisecond * 200)
-	if _, err := w.GetOrderDetails(context.Background(), &pb.ID{Id: commonID.String()}); err == nil {
+	if err := monitorDWH.onOrderUpdated(commonID); err != nil {
+		t.Error(err)
+		return
+	}
+	if _, err := monitorDWH.getOrderDetails(context.Background(), &pb.ID{Id: commonID.String()}); err == nil {
 		t.Error("GetOrderDetails returned an order that should have been deleted")
 		return
 	}
 
 	deal.Duration += 1
 	// Test onDealUpdated event handling.
-	events <- &bch.Event{Data: &bch.DealUpdatedData{ID: commonID}, TS: commonEventTS}
-	time.Sleep(time.Millisecond * 200)
-	if deal, err := w.GetDealDetails(context.Background(), &pb.ID{Id: commonID.String()}); err != nil {
+	if err := monitorDWH.onDealUpdated(commonID); err != nil {
+		t.Error(err)
+		return
+	}
+	if deal, err := monitorDWH.getDealDetails(context.Background(), &pb.ID{Id: commonID.String()}); err != nil {
 		t.Errorf("Failed to GetDealDetails: %s", err)
 		return
 	} else {
-		if deal.Duration != 10021 {
-			t.Errorf("Expected %d, got %d (Deal.Duration)", 10021, deal.Duration)
+		if deal.GetDeal().Duration != 10021 {
+			t.Errorf("Expected %d, got %d (Deal.Duration)", 10021, deal.GetDeal().Duration)
 		}
 	}
 
 	// Test creating an ASK DealChangeRequest.
-	events <- &bch.Event{Data: &bch.DealChangeRequestSentData{ID: big.NewInt(0)}, TS: commonEventTS}
-	time.Sleep(time.Millisecond * 200)
-	if changeRequest, err := getDealChangeRequest(changeRequest.Id); err != nil {
+	if err := monitorDWH.onDealChangeRequestSent(commonEventTS, big.NewInt(0)); err != nil {
+		t.Error(err)
+		return
+	}
+	if changeRequest, err := getDealChangeRequest(monitorDWH, changeRequest.Id); err != nil {
 		t.Errorf("Failed to getDealChangeRequest: %s", err)
 		return
 	} else {
@@ -602,9 +808,11 @@ func TestDWH_monitor(t *testing.T) {
 	// Test that after a second ASK DealChangeRequest was created, the new one was kept and the old one was deleted.
 	changeRequest.Id = "1"
 	changeRequest.Duration = 10021
-	events <- &bch.Event{Data: &bch.DealChangeRequestSentData{ID: big.NewInt(1)}, TS: commonEventTS}
-	time.Sleep(time.Millisecond * 200)
-	if changeRequest, err := getDealChangeRequest(changeRequest.Id); err != nil {
+	if err := monitorDWH.onDealChangeRequestSent(commonEventTS, big.NewInt(1)); err != nil {
+		t.Error(err)
+		return
+	}
+	if changeRequest, err := getDealChangeRequest(monitorDWH, changeRequest.Id); err != nil {
 		t.Errorf("Failed to getDealChangeRequest: %s", err)
 		return
 	} else {
@@ -612,7 +820,7 @@ func TestDWH_monitor(t *testing.T) {
 			t.Errorf("Expected %d, got %d (DealChangeRequest.Duration)", 10021, changeRequest.Duration)
 		}
 	}
-	if _, err := getDealChangeRequest("0"); err == nil {
+	if _, err := getDealChangeRequest(monitorDWH, "0"); err == nil {
 		t.Error("getDealChangeRequest returned a DealChangeRequest that should have been deleted")
 		return
 	}
@@ -620,10 +828,12 @@ func TestDWH_monitor(t *testing.T) {
 	// Test that when a BID DealChangeRequest was created, it was kept (and nothing was deleted).
 	changeRequest.Id = "2"
 	changeRequest.Duration = 10022
-	changeRequest.RequestType = pb.MarketOrderType_MARKET_BID
-	events <- &bch.Event{Data: &bch.DealChangeRequestSentData{ID: big.NewInt(2)}, TS: commonEventTS}
-	time.Sleep(time.Millisecond * 200)
-	if changeRequest, err := getDealChangeRequest(changeRequest.Id); err != nil {
+	changeRequest.RequestType = pb.OrderType_BID
+	if err := monitorDWH.onDealChangeRequestSent(commonEventTS, big.NewInt(2)); err != nil {
+		t.Error(err)
+		return
+	}
+	if changeRequest, err := getDealChangeRequest(monitorDWH, changeRequest.Id); err != nil {
 		t.Errorf("Failed to getDealChangeRequest: %s", err)
 		return
 	} else {
@@ -631,34 +841,38 @@ func TestDWH_monitor(t *testing.T) {
 			t.Errorf("Expected %d, got %d (DealChangeRequest.Duration)", 10022, changeRequest.Duration)
 		}
 	}
-	if _, err := getDealChangeRequest("1"); err != nil {
+	if _, err := getDealChangeRequest(monitorDWH, "1"); err != nil {
 		t.Errorf("DealChangeRequest of type ASK was deleted after a BID DealChangeRequest creation: %s", err)
 		return
 	}
 
 	// Test that when a DealChangeRequest is updated to any status but REJECTED, it is deleted.
 	changeRequest.Id = "1"
-	changeRequest.Status = pb.MarketChangeRequestStatus_REQUEST_ACCEPTED
-	events <- &bch.Event{Data: &bch.DealChangeRequestUpdatedData{ID: big.NewInt(1)}, TS: commonEventTS}
-	time.Sleep(time.Millisecond * 200)
-	if _, err := getDealChangeRequest("1"); err == nil {
+	changeRequest.Status = pb.ChangeRequestStatus_REQUEST_ACCEPTED
+	if err := monitorDWH.onDealChangeRequestUpdated(commonEventTS, big.NewInt(1)); err != nil {
+		t.Error(err)
+		return
+	}
+	if _, err := getDealChangeRequest(monitorDWH, "1"); err == nil {
 		t.Error("DealChangeRequest which status was changed to ACCEPTED was not deleted")
 		return
 	}
 	// Also test that a new DealCondition was created, and the old one was updated.
-	if conditions, err := getDealConditions(t); err != nil {
-		t.Errorf("Failed to getDealConditions: %s", err)
+	if dealConditionsReply, err := monitorDWH.getDealConditions(
+		monitorDWH.ctx, &pb.DealConditionsRequest{DealID: commonID.String()}); err != nil {
+		t.Errorf("Failed to GetDealConditions: %s", err)
 		return
 	} else {
-		if len(conditions) != 2 {
-			t.Errorf("Expected 2 DealConditions, got %d", len(conditions))
+		if len(dealConditionsReply.Conditions) != 2 {
+			t.Errorf("Expected 2 DealConditions, got %d", len(dealConditionsReply.Conditions))
 			return
 		}
-		if conditions[0].EndTime.Seconds != 5 {
+		conditions := dealConditionsReply.Conditions
+		if conditions[1].EndTime.Seconds != 5 {
 			t.Errorf("Expected %d, got %d (DealCondition.EndTime)", 5, conditions[0].EndTime.Seconds)
 			return
 		}
-		if conditions[1].StartTime.Seconds != 5 {
+		if conditions[0].StartTime.Seconds != 5 {
 			t.Errorf("Expected %d, got %d (DealCondition.StartTime)", 5, conditions[1].StartTime.Seconds)
 			return
 		}
@@ -666,33 +880,37 @@ func TestDWH_monitor(t *testing.T) {
 
 	// Test that when a DealChangeRequest is updated to REJECTED, it is kept.
 	changeRequest.Id = "2"
-	changeRequest.Status = pb.MarketChangeRequestStatus_REQUEST_REJECTED
-	events <- &bch.Event{Data: &bch.DealChangeRequestUpdatedData{ID: big.NewInt(2)}, TS: commonEventTS}
-	time.Sleep(time.Millisecond * 200)
-	if _, err := getDealChangeRequest("2"); err != nil {
+	changeRequest.Status = pb.ChangeRequestStatus_REQUEST_REJECTED
+	if err := monitorDWH.onDealChangeRequestUpdated(commonEventTS, big.NewInt(2)); err != nil {
+		t.Error(err)
+		return
+	}
+	if _, err := getDealChangeRequest(monitorDWH, "2"); err != nil {
 		t.Error("DealChangeRequest which status was changed to REJECTED was deleted")
 		return
 	}
 
 	// Test that after a Billed event last DealCondition.Payout is updated.
-	events <- &bch.Event{Data: &bch.BilledData{
-		ID: commonID, PayedAmount: big.NewInt(10)}, TS: commonEventTS * 2,
+	if err := monitorDWH.onBilled(commonEventTS, commonID, big.NewInt(10)); err != nil {
+		t.Error(err)
+		return
 	}
-	time.Sleep(time.Millisecond * 200)
-	if dealConditions, err := getDealConditions(t); err != nil {
+	if dealConditionsReply, err := monitorDWH.getDealConditions(
+		monitorDWH.ctx, &pb.DealConditionsRequest{DealID: commonID.String()}); err != nil {
 		t.Errorf("Failed to GetDealDetails: %s", err)
 		return
 	} else {
-		if len(dealConditions) != 2 {
-			t.Errorf("(Billed) Expected 2 DealConditions, got %d", len(dealConditions))
+		if len(dealConditionsReply.Conditions) != 2 {
+			t.Errorf("(Billed) Expected 2 DealConditions, got %d", len(dealConditionsReply.Conditions))
 			return
 		}
-		if dealConditions[1].TotalPayout.Unwrap().String() != "10" {
+		conditions := dealConditionsReply.Conditions
+		if conditions[0].TotalPayout.Unwrap().String() != "10" {
 			t.Errorf("(Billed) Expected %s, got %s (DealCondition.TotalPayout)",
-				"10", dealConditions[1].TotalPayout.String())
+				"10", conditions[0].TotalPayout.Unwrap().String())
 		}
 	}
-	if dealPayments, err := getDealPayments(t); err != nil {
+	if dealPayments, err := getDealPayments(monitorDWH); err != nil {
 		t.Errorf("Failed to GetDealDetails: %s", err)
 		return
 	} else {
@@ -707,34 +925,44 @@ func TestDWH_monitor(t *testing.T) {
 	}
 
 	// Test that when a Deal's status is updated to CLOSED, Deal and its DealConditions are deleted.
-	deal.Status = pb.MarketDealStatus_MARKET_STATUS_CLOSED
+	deal.Status = pb.DealStatus_DEAL_CLOSED
 	// Test onDealUpdated event handling.
-	events <- &bch.Event{Data: &bch.DealUpdatedData{ID: commonID}, TS: commonEventTS}
-	time.Sleep(time.Millisecond * 200)
-	if _, err := w.GetDealDetails(context.Background(), &pb.ID{Id: commonID.String()}); err == nil {
+	if err := monitorDWH.onDealUpdated(commonID); err != nil {
+		t.Error(err)
+		return
+	}
+	if _, err := monitorDWH.getDealDetails(context.Background(), &pb.ID{Id: commonID.String()}); err == nil {
 		t.Errorf("Deal was not deleted after status changing to CLOSED")
 		return
 	}
-	if dealConditions, err := getDealConditions(t); err != nil {
-		t.Errorf("Failed to getDealConditions: %s", err)
+	if dealConditions, err := monitorDWH.getDealConditions(
+		monitorDWH.ctx, &pb.DealConditionsRequest{DealID: commonID.String()}); err != nil {
+		t.Errorf("Failed to GetDealConditions: %s", err)
 		return
 	} else {
-		if len(dealConditions) != 0 {
-			t.Errorf("(DealUpdated) Expected 0 DealConditions, got %d", len(dealConditions))
+		if len(dealConditions.Conditions) != 0 {
+			t.Errorf("(DealUpdated) Expected 0 DealConditions, got %d", len(dealConditions.Conditions))
+			return
+		}
+	}
+
+	if profile, err := monitorDWH.getProfileInfo(monitorDWH.ctx, &pb.ID{Id: "consumer_id"}, true); err != nil {
+		t.Errorf("Failed to GetProfileInfo: %s", err)
+		return
+	} else {
+		if profile.ActiveBids != 9 {
+			t.Errorf("(DealUpdated) Expected 9 ActiveBids, got %d", profile.ActiveBids)
 			return
 		}
 	}
 
 	// Test that a worker is added after a WorkerAnnounced event.
-	events <- &bch.Event{
-		Data: &bch.WorkerAnnouncedData{
-			MasterID: common.StringToAddress("0x8125721C2413d99a33E351e1F6Bb4e56b6b633FD"),
-			SlaveID:  common.StringToAddress("0x8125721C2413d99a33E351e1F6Bb4e56b6b633FE"),
-		},
-		TS: commonEventTS,
+	if err := monitorDWH.onWorkerAnnounced("0x8125721C2413d99a33E351e1F6Bb4e56b6b633FD",
+		"0x8125721C2413d99a33E351e1F6Bb4e56b6b633FE"); err != nil {
+		t.Error(err)
+		return
 	}
-	time.Sleep(time.Millisecond * 200)
-	if workersReply, err := w.GetWorkers(w.ctx, &pb.WorkersRequest{}); err != nil {
+	if workersReply, err := monitorDWH.getWorkers(monitorDWH.ctx, &pb.WorkersRequest{}); err != nil {
 		t.Errorf("Failed to GetWorkers: %s", err)
 		return
 	} else {
@@ -748,15 +976,12 @@ func TestDWH_monitor(t *testing.T) {
 		}
 	}
 	// Test that a worker is confirmed after a WorkerConfirmed event.
-	events <- &bch.Event{
-		Data: &bch.WorkerConfirmedData{
-			MasterID: common.StringToAddress("0x8125721C2413d99a33E351e1F6Bb4e56b6b633FD"),
-			SlaveID:  common.StringToAddress("0x8125721C2413d99a33E351e1F6Bb4e56b6b633FE"),
-		},
-		TS: commonEventTS,
+	if err := monitorDWH.onWorkerConfirmed("0x8125721C2413d99a33E351e1F6Bb4e56b6b633FD",
+		"0x8125721C2413d99a33E351e1F6Bb4e56b6b633FE"); err != nil {
+		t.Error(err)
+		return
 	}
-	time.Sleep(time.Millisecond * 200)
-	if workersReply, err := w.GetWorkers(w.ctx, &pb.WorkersRequest{}); err != nil {
+	if workersReply, err := monitorDWH.getWorkers(monitorDWH.ctx, &pb.WorkersRequest{}); err != nil {
 		t.Errorf("Failed to GetWorkers: %s", err)
 		return
 	} else {
@@ -770,15 +995,12 @@ func TestDWH_monitor(t *testing.T) {
 		}
 	}
 	// Test that a worker is deleted after a WorkerRemoved event.
-	events <- &bch.Event{
-		Data: &bch.WorkerRemovedData{
-			MasterID: common.StringToAddress("0x8125721C2413d99a33E351e1F6Bb4e56b6b633FD"),
-			SlaveID:  common.StringToAddress("0x8125721C2413d99a33E351e1F6Bb4e56b6b633FE"),
-		},
-		TS: commonEventTS,
+	if err := monitorDWH.onWorkerRemoved("0x8125721C2413d99a33E351e1F6Bb4e56b6b633FD",
+		"0x8125721C2413d99a33E351e1F6Bb4e56b6b633FE"); err != nil {
+		t.Error(err)
+		return
 	}
-	time.Sleep(time.Millisecond * 200)
-	if workersReply, err := w.GetWorkers(w.ctx, &pb.WorkersRequest{}); err != nil {
+	if workersReply, err := monitorDWH.getWorkers(monitorDWH.ctx, &pb.WorkersRequest{}); err != nil {
 		t.Errorf("Failed to getWorkers: %s", err)
 		return
 	} else {
@@ -789,16 +1011,13 @@ func TestDWH_monitor(t *testing.T) {
 	}
 
 	// Test that a Blacklist entry is added after AddedToBlacklist event.
-	events <- &bch.Event{
-		Data: &bch.AddedToBlacklistData{
-			AdderID: common.HexToAddress("0x8125721C2413d99a33E351e1F6Bb4e56b6b633FD"),
-			AddeeID: common.HexToAddress("0x8125721C2413d99a33E351e1F6Bb4e56b6b633FE"),
-		},
-		TS: commonEventTS,
+	if err := monitorDWH.onAddedToBlacklist("0x8125721C2413d99a33E351e1F6Bb4e56b6b633FD",
+		"0x8125721C2413d99a33E351e1F6Bb4e56b6b633FE"); err != nil {
+		t.Error(err)
+		return
 	}
-	time.Sleep(time.Millisecond * 200)
-	if blacklistReply, err := w.GetBlacklist(
-		w.ctx, &pb.ID{Id: "0x8125721C2413d99a33E351e1F6Bb4e56b6b633FD"}); err != nil {
+	if blacklistReply, err := monitorDWH.getBlacklist(
+		monitorDWH.ctx, &pb.BlacklistRequest{OwnerID: "0x8125721C2413d99a33E351e1F6Bb4e56b6b633FD"}); err != nil {
 		t.Errorf("Failed to GetBlacklist: %s", err)
 		return
 	} else {
@@ -809,22 +1028,23 @@ func TestDWH_monitor(t *testing.T) {
 	}
 
 	// Test that a Blacklist entry is deleted after RemovedFromBlacklist event.
-	events <- &bch.Event{
-		Data: &bch.RemovedFromBlacklistData{
-			RemoverID: common.HexToAddress("0x8125721C2413d99a33E351e1F6Bb4e56b6b633FD"),
-			RemoveeID: common.HexToAddress("0x8125721C2413d99a33E351e1F6Bb4e56b6b633FE"),
-		},
-		TS: commonEventTS,
-	}
-	time.Sleep(time.Millisecond * 200)
-	if _, err := w.GetBlacklist(
-		w.ctx, &pb.ID{Id: "0x8125721C2413d99a33E351e1F6Bb4e56b6b633FD"}); err == nil {
-		t.Errorf("GetBlacklist returned a blacklist that should have been deleted: %s", err)
+	if err := monitorDWH.onRemovedFromBlacklist("0x8125721C2413d99a33E351e1F6Bb4e56b6b633FD",
+		"0x8125721C2413d99a33E351e1F6Bb4e56b6b633FE"); err != nil {
+		t.Error(err)
 		return
+	}
+	if repl, err := monitorDWH.getBlacklist(
+		monitorDWH.ctx, &pb.BlacklistRequest{OwnerID: "0x8125721C2413d99a33E351e1F6Bb4e56b6b633FD"}); err != nil {
+		t.Error(err)
+		return
+	} else {
+		if len(repl.Addresses) > 0 {
+			t.Errorf("GetBlacklist returned a blacklist that should have been deleted: %s", err)
+		}
 	}
 }
 
-func getDealChangeRequest(changeRequestID string) (*pb.DealChangeRequest, error) {
+func getDealChangeRequest(w *DWH, changeRequestID string) (*pb.DealChangeRequest, error) {
 	rows, err := w.db.Query("SELECT * FROM DealChangeRequests WHERE Id=?", changeRequestID)
 	if err != nil {
 		return nil, errors.Errorf("query failed: %s", err)
@@ -835,48 +1055,10 @@ func getDealChangeRequest(changeRequestID string) (*pb.DealChangeRequest, error)
 		return nil, errors.New("no rows returned")
 	}
 
-	return w.decodeDealChangeRequest(rows)
+	return globalDWH.decodeDealChangeRequest(rows)
 }
 
-func getDealConditions(t *testing.T) ([]*pb.DealCondition, error) {
-	rows, err := w.db.Query("SELECT rowid, * FROM DealConditions")
-	if err != nil {
-		return nil, errors.Errorf("query failed: %s", err)
-	}
-	defer rows.Close()
-
-	var out []*pb.DealCondition
-	for rows.Next() {
-		if dealCondition, err := w.decodeDealCondition(rows); err != nil {
-			t.Errorf("decodeDealCondition: %s", err)
-		} else {
-			out = append(out, dealCondition)
-		}
-	}
-
-	return out, nil
-}
-
-func getProfiles(t *testing.T) ([]*pb.Profile, error) {
-	rows, err := w.db.Query("SELECT * FROM Profiles")
-	if err != nil {
-		return nil, errors.Errorf("query failed: %s", err)
-	}
-	defer rows.Close()
-
-	var out []*pb.Profile
-	for rows.Next() {
-		if profile, err := w.decodeProfile(rows); err != nil {
-			t.Errorf("failed to decode Profile: %s", err)
-		} else {
-			out = append(out, profile)
-		}
-	}
-
-	return out, nil
-}
-
-func getDealPayments(t *testing.T) ([]*dealPayment, error) {
+func getDealPayments(w *DWH) ([]*dealPayment, error) {
 	rows, err := w.db.Query("SELECT * FROM DealPayments")
 	if err != nil {
 		return nil, errors.Errorf("query failed: %s", err)
@@ -891,7 +1073,7 @@ func getDealPayments(t *testing.T) ([]*dealPayment, error) {
 			dealID     string
 		)
 		if err := rows.Scan(&billedTS, &paidAmount, &dealID); err != nil {
-			t.Errorf("failed to decode DealPayment: %s", err)
+			return nil, err
 		} else {
 			out = append(out, &dealPayment{
 				BilledTS:   billedTS,
@@ -904,7 +1086,7 @@ func getDealPayments(t *testing.T) ([]*dealPayment, error) {
 	return out, nil
 }
 
-func getCertificates(t *testing.T) ([]*pb.Certificate, error) {
+func getCertificates(w *DWH) ([]*pb.Certificate, error) {
 	rows, err := w.db.Query("SELECT * FROM Certificates")
 	if err != nil {
 		return nil, errors.Errorf("query failed: %s", err)
@@ -929,28 +1111,12 @@ type dealPayment struct {
 	DealID     string
 }
 
-func getTestDWH() (*DWH, error) {
-	var (
-		ctx = context.Background()
-		cfg = &Config{
-			Storage: &storageConfig{
-				Backend:  "sqlite3",
-				Endpoint: testDBPath,
-			},
-		}
-		w = &DWH{
-			ctx:      ctx,
-			cfg:      cfg,
-			logger:   log.GetLogger(ctx),
-			commands: sqliteCommands,
-		}
-	)
-
+func setupTestDB(w *DWH) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	if err := setupSQLite(w); err != nil {
-		return nil, err
+		return err
 	}
 
 	for i := 0; i < 10; i++ {
@@ -966,7 +1132,7 @@ func getTestDWH() (*DWH, error) {
 			pb.NewBigIntFromInt(20010+int64(i)).PaddedString(), // Price
 			30010+i, // StartTime
 			40010+i, // EndTime
-			uint64(pb.MarketDealStatus_MARKET_STATUS_ACCEPTED),
+			uint64(pb.DealStatus_DEAL_ACCEPTED),
 			pb.NewBigIntFromInt(50010+int64(i)).PaddedString(), // BlockedBalance
 			pb.NewBigIntFromInt(60010+int64(i)).PaddedString(), // TotalPayout
 			70010+i,      // LastBillTS
@@ -990,7 +1156,7 @@ func getTestDWH() (*DWH, error) {
 			120,
 		)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		_, err = w.db.Exec(
@@ -998,18 +1164,18 @@ func getTestDWH() (*DWH, error) {
 			fmt.Sprintf("ask_id_%d", i),
 			12345, // CreatedTS
 			fmt.Sprintf("deal_id_%d", i),
-			uint64(pb.MarketOrderType_MARKET_ASK),
-			uint64(pb.MarketOrderStatus_MARKET_ORDER_ACTIVE),
+			uint64(pb.OrderType_ASK),
+			uint64(pb.OrderStatus_ORDER_ACTIVE),
 			"ask_author", // AuthorID
 			"bid_author", // CounterpartyID
 			10010+i,
 			pb.NewBigIntFromInt(20010+int64(i)).PaddedString(), // Price
 			7, // Netflags
-			uint64(pb.MarketIdentityLevel_MARKET_ANONIMOUS),
+			uint64(pb.IdentityLevel_ANONIMOUS),
 			fmt.Sprintf("blacklist_%d", i),
 			[]byte{1, 2, 3},          // Tag
 			fmt.Sprintf("3001%d", i), // FrozenSum
-			uint64(pb.MarketIdentityLevel_MARKET_PSEUDONYMOUS),
+			uint64(pb.IdentityLevel_PSEUDONYMOUS),
 			"CreatorName",
 			"CreatorCountry",
 			[]byte{}, // CreatorCertificates
@@ -1027,7 +1193,7 @@ func getTestDWH() (*DWH, error) {
 			120+i,
 		)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		_, err = w.db.Exec(
@@ -1035,18 +1201,18 @@ func getTestDWH() (*DWH, error) {
 			fmt.Sprintf("bid_id_%d", i),
 			12345, // CreatedTS
 			fmt.Sprintf("deal_id_%d", i),
-			uint64(pb.MarketOrderType_MARKET_BID),
-			uint64(pb.MarketOrderStatus_MARKET_ORDER_ACTIVE),
+			uint64(pb.OrderType_BID),
+			uint64(pb.OrderStatus_ORDER_ACTIVE),
 			"bid_author", // AuthorID
 			"ask_author", // CounterpartyID
 			10010-i,      // Duration
 			pb.NewBigIntFromInt(20010+int64(i)).PaddedString(), // Price
 			5, // Netflags
-			uint64(pb.MarketIdentityLevel_MARKET_ANONIMOUS),
+			uint64(pb.IdentityLevel_ANONIMOUS),
 			fmt.Sprintf("blacklist_%d", i),
-			[]byte{1, 2, 3},                                    // Tag
-			fmt.Sprintf("3001%d", i),                           // FrozenSum
-			uint64(pb.MarketIdentityLevel_MARKET_PSEUDONYMOUS), // CreatorIdentityLevel
+			[]byte{1, 2, 3},                       // Tag
+			fmt.Sprintf("3001%d", i),              // FrozenSum
+			uint64(pb.IdentityLevel_PSEUDONYMOUS), // CreatorIdentityLevel
 			"CreatorName",
 			"CreatorCountry",
 			[]byte{}, // CreatorCertificates
@@ -1064,14 +1230,43 @@ func getTestDWH() (*DWH, error) {
 			120-i,
 		)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		_, err = w.db.Exec(w.commands["insertDealChangeRequest"],
 			fmt.Sprintf("changeRequest_%d", i), 0, 0, 0, 0, 0, "id_0")
 		if err != nil {
-			return nil, err
+			return err
 		}
+
+		var identityLevel int
+		if (i % 2) == 0 {
+			identityLevel = 0
+		} else {
+			identityLevel = 1
+		}
+		_, err = w.db.Exec("INSERT INTO Profiles VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			fmt.Sprintf("test_profile_%d", i), identityLevel, "sortedProfile", "", 0, 0, []byte{}, 0, 0)
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err := w.db.Exec("INSERT INTO Profiles VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		fmt.Sprintf("consumer_id"), 3, "Consumer", "", 0, 0, []byte{}, 10, 10)
+	if err != nil {
+		return err
+	}
+
+	_, err = w.db.Exec("INSERT INTO Profiles VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		fmt.Sprintf("supplier_id"), 3, "Supplier", "", 0, 0, []byte{}, 10, 10)
+	if err != nil {
+		return err
+	}
+
+	_, err = w.db.Exec("INSERT INTO Blacklists VALUES (?, ?)", "blacklisting_user", "consumer_id")
+	if err != nil {
+		return err
 	}
 
 	if _, err := w.db.Exec(w.commands["updateLastKnownBlockSQLite"], 0); err != nil {
@@ -1079,5 +1274,5 @@ func getTestDWH() (*DWH, error) {
 			zap.Uint64("block_number", 0))
 	}
 
-	return w, nil
+	return nil
 }
