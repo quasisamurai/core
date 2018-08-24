@@ -1,56 +1,78 @@
 #!/usr/bin/env make
-VER = v0.3.3
+
+# Version of the entire package. Do not forget to update this when it's time
+# to bump the version.
+VERSION = v0.4.9
+
+# Build tag. Useful to distinguish between same-version builds, but from
+# different commits.
 BUILD = $(shell git rev-parse --short HEAD)
-FULL_VER = $(VER)-$(BUILD)
 
-GOCMD=./cmd
-ifeq ($(GO), )
-    GO=go
+# Full version includes both semantic version and git ref.
+FULL_VERSION = $(VERSION)-$(BUILD)
+
+# NOTE: variables defined with := in GNU make are expanded when they are
+# defined rather than when they are used.
+GOCMD := ./cmd
+
+# NOTE: variables defined with ?= sets the default value, which can be
+# overriden using env.
+GO ?= go
+GOPATH ?= $(shell ls -d ~/go)
+
+TARGETDIR := target
+INSTALLDIR := ${GOPATH}/bin/
+
+HOSTOS := $(shell uname -s | tr '[:upper:]' '[:lower:]')
+HOSTARCH := $(shell uname -m)
+
+GOOS ?= ${HOSTOS}
+GOARCH ?= ${HOSTARCH}
+
+# Set the execution extension for Windows.
+ifeq (${GOOS},windows)
+    EXE := .exe
 endif
 
-ifeq ($(GOPATH), )
-    GOPATH=$(shell ls -d ~/go)
-endif
+OS_ARCH := $(GOOS)_$(GOARCH)$(EXE)
 
-INSTALLDIR=${GOPATH}/bin/
+WORKER     := ${TARGETDIR}/sonmworker_$(OS_ARCH)
+NODE       := ${TARGETDIR}/sonmnode_$(OS_ARCH)
+CLI        := ${TARGETDIR}/sonmcli_$(OS_ARCH)
+AUTOCLI    := ${TARGETDIR}/autocli_$(OS_ARCH)
+DWH        := ${TARGETDIR}/sonmdwh_$(OS_ARCH)
+RENDEZVOUS := ${TARGETDIR}/sonmrendezvous_$(OS_ARCH)
+RELAY      := ${TARGETDIR}/sonmrelay_$(OS_ARCH)
+OPTIMUS    := ${TARGETDIR}/sonmoptimus_$(OS_ARCH)
+LSGPU      := ${TARGETDIR}/lsgpu_$(OS_ARCH)
+PANDORA    := ${TARGETDIR}/pandora_$(OS_ARCH)
+ORACLE     := ${TARGETDIR}/sonmoracle_$(OS_ARCH)
+CONNOR     := ${TARGETDIR}/sonmconnor_$(OS_ARCH)
 
+TAGS = nocgo
 
-TARGETDIR=target
-ARCH := $(shell uname -m)
-OS := $(shell uname -s | tr '[:upper:]' '[:lower:]')
-OS_ARCH := $(OS)_$(ARCH)
-
-WORKER=${TARGETDIR}/sonmworker_$(OS_ARCH)
-CLI=${TARGETDIR}/sonmcli_$(OS_ARCH)
-LOCAL_NODE=${TARGETDIR}/sonmnode_$(OS_ARCH)
-AUTOCLI=${TARGETDIR}/autocli_$(OS_ARCH)
-DWH=${TARGETDIR}/sonmdwh_$(OS_ARCH)
-RENDEZVOUS=${TARGETDIR}/sonmrendezvous_$(OS_ARCH)
-RELAY=${TARGETDIR}/sonmrelay_$(OS_ARCH)
-LSGPU=${TARGETDIR}/lsgpu_$(OS_ARCH)
-
-TAGS=nocgo
-
-GPU_SUPPORT?=false
+GPU_SUPPORT ?= false
 ifeq ($(GPU_SUPPORT),true)
-    GPU_TAGS=cl
-    # required for build nvidia-docker libs with NVML included via cgo
-    NV_CGO=vendor/github.com/sshaman1101/nvidia-docker/build
-    CGO_LDFLAGS=-L$(shell pwd)/${NV_CGO}/lib
-    CGO_CFLAGS=-I$(shell pwd)/${NV_CGO}/include
-    CGO_LDFLAGS_ALLOW='-Wl,--unresolved-symbols=ignore-in-object-files'
+    GPU_TAGS := cl
+    # Required for build nvidia-docker libs with NVML included via cgo.
+    NV_CGO            := vendor/github.com/sshaman1101/nvidia-docker/build
+    CGO_LDFLAGS       := -L$(shell pwd)/${NV_CGO}/lib
+    CGO_CFLAGS        := -I$(shell pwd)/${NV_CGO}/include
+    CGO_LDFLAGS_ALLOW := '-Wl,--unresolved-symbols=ignore-in-object-files'
 endif
 
-
-ifeq ($(OS),linux)
-SED=sed -i 's/github\.com\/sonm-io\/core\/vendor\///g' insonmnia/dealer/hub_mock.go
+# This can be set to "false" to enable cross-compilation on non-linux planforms for linux.
+ifeq (${GOOS},linux)
+    WITH_NL ?= true
+else
+    WITH_NL ?= false
 endif
 
-ifeq ($(OS),darwin)
-SED=sed -i "" 's/github\.com\/sonm-io\/core\/vendor\///g' insonmnia/dealer/hub_mock.go
+ifeq ($(WITH_NL),true)
+    NL_TAGS := nl
 endif
 
-LDFLAGS = -X main.appVersion=$(FULL_VER)
+LDFLAGS = -X main.appVersion=$(FULL_VERSION)
 
 .PHONY: fmt vet test
 
@@ -58,57 +80,70 @@ all: mock vet fmt build test
 
 build/worker:
 	@echo "+ $@"
-	CGO_LDFLAGS_ALLOW=${CGO_LDFLAGS_ALLOW} CGO_LDFLAGS=${CGO_LDFLAGS} CGO_CFLAGS=${CGO_CFLAGS} ${GO} build -tags "$(TAGS) $(GPU_TAGS)" -ldflags "-s $(LDFLAGS)" -o ${WORKER} ${GOCMD}/worker
+    ifneq (${GOOS},linux)
+        ifeq (${WITH_NL},true)
+			@echo "ERROR: Building with netlink support on non-linux platforms is not allowed"
+			@exit 1
+        endif
+    endif
+	CGO_LDFLAGS_ALLOW=${CGO_LDFLAGS_ALLOW} CGO_LDFLAGS=${CGO_LDFLAGS} CGO_CFLAGS=${CGO_CFLAGS} ${GO} build -tags "$(TAGS) $(GPU_TAGS) ${NL_TAGS}" -ldflags "-s $(LDFLAGS)" -o ${WORKER} ${GOCMD}/worker
 
 build/dwh:
 	@echo "+ $@"
-	${GO} build -tags "$(TAGS)" -ldflags "-s $(LDFLAGS)" -o ${DWH} ${GOCMD}/dwh
+	${GO} build -tags "$(TAGS)" -ldflags "$(LDFLAGS)" -o ${DWH} ${GOCMD}/dwh
 
 build/rv:
 	@echo "+ $@"
-	${GO} build -tags "$(TAGS)" -o ${RENDEZVOUS} ${GOCMD}/rv
+	${GO} build -tags "$(TAGS)" -ldflags "$(LDFLAGS)" -o ${RENDEZVOUS} ${GOCMD}/rv
 
 build/rendezvous: build/rv
 
 build/relay:
 	@echo "+ $@"
-	${GO} build -tags "$(TAGS)" -o ${RELAY} ${GOCMD}/relay
+	${GO} build -tags "$(TAGS)" -ldflags "$(LDFLAGS)" -o ${RELAY} ${GOCMD}/relay
 
 build/cli:
 	@echo "+ $@"
-	${GO} build -tags "$(TAGS)" -ldflags "-s $(LDFLAGS)" -o ${CLI} ${GOCMD}/cli
+	${GO} build -tags "$(TAGS)" -ldflags "$(LDFLAGS)" -o ${CLI} ${GOCMD}/cli
 
 build/node:
 	@echo "+ $@"
-	${GO} build -tags "$(TAGS)" -ldflags "-s $(LDFLAGS)" -o ${LOCAL_NODE} ${GOCMD}/node
+	${GO} build -tags "$(TAGS)" -ldflags "$(LDFLAGS)" -o ${NODE} ${GOCMD}/node
 
 build/lsgpu:
 	@echo "+ $@"
-	${GO} build -tags "$(TAGS)" -ldflags "-s $(LDFLAGS)" -o ${LSGPU} ${GOCMD}/lsgpu
-
-build/cli_win32:
-	@echo "+ $@"
-	GOOS=windows GOARCH=386 ${GO} build -tags "$(TAGS)" -ldflags "-s $(LDFLAGS).win32" -o ${CLI}_win32.exe ${GOCMD}/cli
-
-build/node_win32:
-	@echo "+ $@"
-	GOOS=windows GOARCH=386 ${GO} build -tags "$(TAGS)" -ldflags "-s $(LDFLAGS).win32" -o ${LOCAL_NODE}_win32.exe ${GOCMD}/node
+	${GO} build -tags "$(TAGS)" -ldflags "$(LDFLAGS)" -o ${LSGPU} ${GOCMD}/lsgpu
 
 build/autocli:
 	@echo "+ $@"
-	${GO} build -tags "$(TAGS)" -ldflags "-s $(LDFLAGS)" -o ${AUTOCLI} ${GOCMD}/autocli
+	${GO} build -tags "$(TAGS)" -ldflags "$(LDFLAGS)" -o ${AUTOCLI} ${GOCMD}/autocli
 
+build/pandora:
+	@echo "+ $@"
+	${GO} build -tags "$(TAGS)" -ldflags "$(LDFLAGS)" -o ${PANDORA} ${GOCMD}/pandora
+
+build/optimus:
+	@echo "+ $@"
+	${GO} build -tags "$(TAGS)" -ldflags "$(LDFLAGS)" -o ${OPTIMUS} ${GOCMD}/optimus
+
+build/oracle:
+	@echo "+ $@"
+	${GO} build -tags "$(TAGS)" -ldflags "$(LDFLAGS)" -o ${ORACLE} ${GOCMD}/oracle
+
+build/connor:
+	@echo "+ $@"
+	${GO} build -tags "$(TAGS)" -ldflags "$(LDFLAGS)" -o ${CONNOR} ${GOCMD}/connor
 
 build/insomnia: build/worker build/cli build/node
 
-build/aux: build/relay build/rv build/dwh
+build/aux: build/relay build/rv build/dwh build/pandora build/optimus build/oracle build/connor
 
 build: build/insomnia build/aux
 
 install: all
 	@echo "+ $@"
 	mkdir -p ${INSTALLDIR}
-	cp ${WORKER} ${CLI} ${LOCAL_NODE} ${INSTALLDIR}
+	cp ${WORKER} ${CLI} ${NODE} ${INSTALLDIR}
 
 vet:
 	@echo "+ $@"
@@ -123,6 +158,14 @@ test: mock
 	@echo "+ $@"
 	${GO} test -tags nocgo $(shell go list ./... | grep -vE 'vendor|blockchain')
 
+# Everything except DWH tests.
+test/lite: mock
+	@echo "+ $@"
+	${GO} test -tags nocgo $(shell go list ./... | grep -vE 'vendor|blockchain|dwh')
+
+contracts:
+	@$(MAKE) -C blockchain/source all
+
 grpc:
 	@echo "+ $@"
 	@if ! which protoc > /dev/null; then echo "protoc protobuf compiler required for build"; exit 1; fi;
@@ -133,19 +176,16 @@ build_mockgen:
 	cd ./vendor/github.com/golang/mock/mockgen/ && go install
 
 mock: build_mockgen
-	mockgen -package miner -destination insonmnia/miner/overseer_mock.go -source insonmnia/miner/overseer.go
-	mockgen -package task_config -destination cmd/cli/task_config/config_mock.go  -source cmd/cli/task_config/config.go
-	mockgen -package accounts -destination accounts/keys_mock.go  -source accounts/keys.go
-	mockgen -package benchmarks -destination insonmnia/benchmarks/benchmarks_mock.go  -source insonmnia/benchmarks/benchmarks.go
+	mockgen -package worker -destination insonmnia/worker/overseer_mock.go -source insonmnia/worker/overseer.go
+	mockgen -package benchmarks -destination insonmnia/benchmarks/benchmarks_mock.go -source insonmnia/benchmarks/benchmarks.go
+	mockgen -package benchmarks -destination insonmnia/benchmarks/mapping_mock.go -source insonmnia/benchmarks/mapping.go
 	mockgen -package blockchain -destination blockchain/api_mock.go  -source blockchain/api.go
 	mockgen -package sonm -destination proto/marketplace_mock.go  -source proto/marketplace.pb.go
-	mockgen -package config -destination cmd/cli/config/config_mock.go  -source cmd/cli/config/config.go \
-		-aux_files accounts=accounts/keys.go,logging=insonmnia/logging/logging.go
-	mockgen -package dealer -destination insonmnia/dealer/hub_mock.go \
-		"github.com/sonm-io/core/proto" HubClient && ${SED}
+	mockgen -package sonm -destination proto/dwh_mock.go  -source proto/dwh.pb.go
+	mockgen -package node -destination insonmnia/node/server_mock.go -source insonmnia/node/server.go
 
 clean:
-	rm -f ${WORKER} ${CLI} ${LOCAL_NODE} ${AUTOCLI} ${RENDEZVOUS}
+	rm -f ${WORKER} ${CLI} ${NODE} ${AUTOCLI} ${RENDEZVOUS}
 	find . -name "*_mock.go" | xargs rm -f
 
 deb:

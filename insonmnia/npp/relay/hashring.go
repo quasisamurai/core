@@ -21,16 +21,18 @@
 package relay
 
 import (
+	"fmt"
+	"strings"
 	"sync"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/serialx/hashring"
+	"github.com/sonm-io/core/insonmnia/npp/nppc"
 )
 
 type continuum struct {
 	mu        sync.RWMutex
 	continuum *hashring.HashRing
-	tracking  map[common.Address]string
+	tracking  map[nppc.ResourceID]string
 }
 
 func newContinuum() *continuum {
@@ -41,7 +43,7 @@ func newContinuum() *continuum {
 
 // Add adds a new weighted node into the continuum, returning list of ETH
 // addresses that are need to be rescheduled.
-func (m *continuum) Add(node string, weight int) []common.Address {
+func (m *continuum) Add(node string, weight int) []nppc.ResourceID {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -54,7 +56,7 @@ func (m *continuum) Add(node string, weight int) []common.Address {
 //
 // When a new node is inserted into the continuum the Add method returns the
 // list of addresses that must be rescheduled.
-func (m *continuum) Track(addr common.Address) {
+func (m *continuum) Track(addr nppc.ResourceID) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -67,7 +69,7 @@ func (m *continuum) Track(addr common.Address) {
 }
 
 // StopServerTracking stops tracking the given server connection described by ID.
-func (m *continuum) StopServerTracking(addr common.Address) {
+func (m *continuum) StopServerTracking(addr nppc.ResourceID) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -75,7 +77,7 @@ func (m *continuum) StopServerTracking(addr common.Address) {
 }
 
 // Remove removes the specified node from the continuum
-func (m *continuum) Remove(node string) []common.Address {
+func (m *continuum) Remove(node string) []nppc.ResourceID {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -84,9 +86,9 @@ func (m *continuum) Remove(node string) []common.Address {
 	return m.scanTrackingChanges()
 }
 
-func (m *continuum) scanTrackingChanges() []common.Address {
-	addrs := make([]common.Address, 0)
-	tracking := make(map[common.Address]string, 0)
+func (m *continuum) scanTrackingChanges() []nppc.ResourceID {
+	addrs := make([]nppc.ResourceID, 0)
+	tracking := make(map[nppc.ResourceID]string, 0)
 
 	for addr, trackedNode := range m.tracking {
 		node, ok := m.continuum.GetNode(addr.String())
@@ -101,9 +103,55 @@ func (m *continuum) scanTrackingChanges() []common.Address {
 	return addrs
 }
 
-// Get returns a node that will serve the specified ETH address.
-func (m *continuum) Get(addr common.Address) (string, bool) {
+func (m *continuum) get(addr nppc.ResourceID) (string, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.continuum.GetNode(addr.String())
+}
+
+// GetNode returns a node that will serve the specified ETH address.
+func (m *continuum) GetNode(addr nppc.ResourceID) (*Node, error) {
+	node, ok := m.get(addr)
+	if !ok {
+		return nil, errEmptyContinuum()
+	}
+
+	return ParseNode(node)
+}
+
+// Node represents a node point on the Continuum.
+type Node struct {
+	Name string
+	Addr string
+}
+
+func newNode(name, addr string) (*Node, error) {
+	if len(name) == 0 {
+		return nil, fmt.Errorf("node name is empty")
+	}
+	if len(addr) == 0 {
+		return nil, fmt.Errorf("node address is empty")
+	}
+
+	m := &Node{
+		Name: name,
+		Addr: addr,
+	}
+
+	return m, nil
+}
+
+func ParseNode(node string) (*Node, error) {
+	idx := strings.LastIndex(node, "@")
+	if idx < 0 {
+		return nil, fmt.Errorf("continuum node must be in `<name>@<addr>` format")
+	}
+
+	name, addr := node[:idx], node[idx+1:]
+
+	return newNode(name, addr)
+}
+
+func (m *Node) String() string {
+	return fmt.Sprintf("%s@%s", m.Name, m.Addr)
 }

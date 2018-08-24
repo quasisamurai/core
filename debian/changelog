@@ -1,3 +1,907 @@
+sonm-core (0.4.9) unstable; urgency=low
+
+  * Added: network shaping (#1280).
+    This enables network traffic shaping on a worker, making it possible to limit
+    network bandwidth for each deal separately.
+    Internally this is achieved using linux kernel traffic control mechanism and
+    making friendship with Docker.
+    At the first attempt, we achieved this by using policing, which drops excess
+    packets, throttling TCP window sizes and reducing the overall output rate of
+    affected traffic streams. Overly aggressive burst sizes (which is tricky to set
+    properly) led to excess packet drops and throttle the overall output rate,
+    particularly with TCP-based flows.
+    All the above is relevant to the TBF (token bucket filtering) classless discipline,
+    which is the easiest way to shape network traffic.
+    An alternative approach is using the HTB (hierarchical token bucket) queueing
+    discipline, which is classful and allows to build hierarchical rules for traffic
+    shaping and policing. For egress traffic, intermediate functional block (IFB)
+    devices are used which has separate packet queueing.
+    All this allows both to build hierarchical rules for each packet type, network
+    device, etc; and moreover to restrict traffic for each container and/or for the
+    entire worker.
+    It is clear for now that both direction shaping works without packed dropping
+    spikes. Epic win.
+    After an ask plan is created the following actions are performed:
+    - Create bridge device with its own iptables rules, where all containers for
+      a specific deal will live. This bridge allows tasks to communicate with
+      each other, but not with tasks spawned within another deal. For that purposes,
+      you have to use overlay network drivers.
+    - Apply TC rules to that bridge, that will limit ingress traffic. Yep, ingress,
+      because container's egress traffic seems as an ingress traffic for the Docker
+      device.
+    - Create IFB virtual device.
+    - Mirror egress traffic to that IFB by applying TC filters and create another
+      rule for that traffic.
+  * Added: print order identity in CLI (#1286).
+  * Added: allow obtaining balance by specified wallet (#1294).
+    This commit extends Node API to be able to call blockchain's "balanceOf"
+    with given eth address as a parameter. On the CLI-side there is still a
+    single method but with an optional extra parameter.
+  * Added: network shaping for BTFS (#1299).
+    This commit activates network shaping for BTFS volume plugin.
+    Previously BTFS was run under a separate bridge network, which was not
+    connected with the network under which the deal tasks are being executed.
+    However, now we are capable of performing task's network shaping under the
+    constraints specified in a supplier's order.
+    This commit changes the previous behavior with starting BTFS container
+    under the same network with the task it manages, so network limitations
+    should properly work.
+  * Added: prometheus metrics for Connor (#1296).
+    This adds Prometheus metrics which gives us some info about orders and
+    deals lifespans.
+  * Added: simulation mode in Optimus (#1308).
+    This commit allows Optimus to be executed in simulation mode, fetching
+    only specified orders from the marketplace.
+    Also fixed a bug when Optimus removed ask-plans in dry-run mode.
+  * Added: update price changes in Optimus (#1307).
+    This teaches Optimus to update auto-accepted price changes for deals.
+    Previously it only considers a price specified in ask-plan, not the real
+    one, which may change during deal's lifetime.
+  * Changed: default DWH config update (#1288).
+  * Changed: tune dry-run in Optimus (#1301).
+    Now Optimus while being run under dry-run option will show removing
+    candidates ask-plans.
+  * Fixed: parse BID and ASK strictly (#1282).
+    This fixes a bug when a user can accidentally create BID or ASK with
+    fields that are unknown to the Node/Worker. Such behavior is a source of
+    confusion and frustration, so we just forbid unknown fields when
+    doing "sonmcli order create" and "sonmcli worker ask-plan create".
+  * Fixed: properly calculate free devices in Optimus (#1285).
+    This fixes a bug where during the calculation of free devices a mutation
+    of meant-to-be-immutable field occurs, which lead to improper free devices
+    state.
+    As a side effect, one could see that Optimus performed invalid optimization
+    in the case where the most optimal ask-plans already exist.
+  * Fixed: sudden EOF while connecting through NPP (#1253).
+    The problem is - both client and server successfully connect to each other,
+    so there are at least 2 different connections.
+    The server must serve both of them with further dropping the hanging one.
+    The client must return the first one and close another.
+    If we are a server - we just put the successful connection in a queue and
+    return on next "Accept" called.
+    If we are a client - do as we did before.
+  * Fixed: processor shutdown in DWH (#1270).
+    Hitting Ctrl-C could lead to a long and painful shutdown if DB and other
+    resources were closed before the last iteration of the processor loop. This
+    problem is fixed by making sure that the processing loop is fully locked,
+    not just its parts.
+  * Fixed: proper blacklisting in Connor (#1292).
+    This fixes the blacklist timer behavior on failures and successes.
+    Also, resetting the timer if a user was un-blacklisted on the market.
+  * Fixed: properly discover loopback links (#1297).
+    This fixes a bug where our components, like Node and Worker resolved
+    loopback devices using self-localhost-resolution.
+    This sometimes led to a problem on systems with disabled IPv6 but
+    misconfigured /etc/hosts.
+  * Fixed: proper BTFS initialization (#1298).
+    This fixes error ignoring while initializing BTFS volume plugin.
+  * Fixed: proper JSON errors for task list cmd (#1300).
+  * Fixed: check BID identity level in Optimus (#1287).
+    This is required due to #1293.
+  * Fixed: proper order cancel in Connor (#1306).
+  * Fixed: proper own ask filtering in Optimus (#1312).
+    Optimus should no longer create plans for its own asks.
+
+ -- Evgeny Safronov <division494@gmail.com>  Wed, 15 Aug 2018 14:12:09 +0300
+
+sonm-core (0.4.8) unstable; urgency=low
+
+  * Added: feat: BTFS volume plugin for Worker (#1274).
+    This commit activates an ability to spawn SONM tasks with torrent
+    filesystem attached as a volume.
+    Internally this is achieved by using BTFS application that constructs a
+    torrent client and mounts itself on a filesystem via fuse. It's the
+    read-only solution designed to distribute large amount of data across
+    multiple task without single point of failure - all tasks help each
+    other to share the data, which reduces network pressure and improves
+    application scalability.
+  * Added: enable pprof for Node (#1272).
+  * Changed: update gRPC library (#1258).
+  * Fixed: proper config for Connor (#1265).
+  * Fixed: proper Connor's binary path in systemd-unit (#1271).
+  * Fixed: load keystore even if "--insecure" flag is set (#1276).
+    This commit fixes a problem when "--insecure" flag is used
+    with the CLI and some sub-command wants to load a key or
+    obtain a default eth address from the key store.
+    Therefore, now we'll load keystore prematurely for any command.
+    Now if insecure mode is activated, only TLS credentials creation
+    will be skipped for gRPC's client connection.
+  * Fixed: show Order's price per hour (#1277).
+
+ -- Evgeny Safronov <division494@gmail.com>  Tue, 07 Aug 2018 14:05:43 +0300
+
+sonm-core (0.4.7) unstable; urgency=low
+
+  * Added: Connor, the auto-buy mining bot (#1227).
+    This introduces Connor, the bot which buying resources for mining. The
+    current implementation can:
+     - Places BID orders according to config.
+     - Restores orders, deals, and tasks between restarts.
+     - Loads actual price of the target token, create orders according to
+       price and marginality coefficient.
+     - Tracks token price changes using CoinMarketCap, re-create orders if
+       the price changed sufficiently.
+     - Looks for actual hashrate by logs and mining pool statistics.
+     - Closes deals which give us less hash-rate than offered.
+    Note that current implementation is strongly coupled with the Ethereum
+    mining on the DwarfPool.
+    Next, we'll make it more modular and configurable for other popular tokens
+    and pools.
+  * Added: enable pprof in Optimus (#1255).
+  * Changed: fast benchmark mapping in Optimus (#1256).
+    Added smart benchmark mapping algorithm, which indexes benchmarks in a flat
+    map backed with array.
+    This increases performance of genetic algorithm in 2-3 times.
+  * Changed: use proper combinations limits in Optimus (#1261).
+    It doesn't make sense to building combinations of GPUs with k more than n,
+    which is the length of currently free GPUs.
+  * Changed: avoid extra copying in Optimus (#1262).
+  * Fixed: avoid global logger in puncher (#1252).
+    After this fix no strangely formatted logging messages should appear.
+  * Fixed: nil pointer dereferencing in Optimus (#1257).
+  * Fixed: find leaf node in Optimus even with no price (#1260).
+  * Fixed: use context without timeout for stream methods (#1263).
+
+ -- Evgeny Safronov <division494@gmail.com>  Fri, 03 Aug 2018 14:58:16 +0300
+
+sonm-core (0.4.6) unstable; urgency=low
+
+  * Added: non-negative LLS solver for Optimus (#1090).
+    This adds a new more-physically-correct optimization method - the non-negative
+    multidimensional linear least squares (NNLS).
+    It constraints the result vector values to be a non-negative, which in its
+    turn means that each of them will show to the real benchmark price per
+    basis.
+    Also this shows an extremely performance boost - million of orders are
+    optimized in less than for a second.
+  * Added: pre-request logging interceptor (#1229).
+    This commit activates automatic request logging for gRPC services. This
+    includes logging service and request names with tracing attributes if
+    activated. Both unary and streaming API are supported.
+    Internally this is done by using gRPC request interceptors, that are
+    invoked before the actual method called.
+  * Added: optionally expand deal's orders in CLI (#1238).
+    The new flag "--expand" works as follows: if specified it also fetches
+    information about both BID and ASK orders in a deal and prints it.
+  * Added: genetic optimization in Optimus (#1234).
+    This commit introduces a new genetic optimization algorithm helping
+    Optimus to find the best orders set.
+    The core idea is to create multiple knapsack populations with random
+    orders inside and try to pack them. Failed populations should die, while
+    successful ones will live. Sometimes random mutation occurs, which
+    results in random order addition or removal from the set. The best
+    individuals will cross each other attempting to produce more adapted
+    children.
+    BEWARE OF DRAGONS: this is quite CPU intensive algorithm, so there are
+    predefined generation and age limits. However even with them it may eat
+    all your CPU.
+    Additionally now it is possible to combine several models to run them
+    parallel and to select the best one.
+  * Added: branch bound model in Optimus (#1239).
+    This adds a new model - Branch Bound Tree, which finds a global optimum
+    solution for knapsack problem.
+    However, its complexity is still exponential, so it must be activated only
+    when the number of matching orders is relatively low.
+  * Added: optional tag for task (#1236).
+    This allows to specify used-defined tag when starting a task. This tag can
+    be fetched back later when monitoring running tasks.
+  * Changed: make masterchain gas price configurable (#1195).
+    This option now useful for deposit and gatekeeper withdraw;
+    If option not defined gas price is determined by the latest blocks median
+    gas price.
+  * Changed: add comments in default bid config (#1233).
+  * Changed: reduce default price threshold in Optimus (#1235).
+    The new value is equivalent of ~0.48$ per day or 175.2$ per year.
+  * Changed: Optimus config description - init everything from config (#1240).
+    Now the "optimization" settings can be specified to each worker Optimus
+    monitor independently.
+    The config itself now allows to specify much more things.
+    Changed regression settings (previous "classifier"), it was slightly
+    flattened.
+    Also dropped "optimization.interval" option.
+    It is highly recommended to switch to the new config instead of using old
+    ones because otherwise some settings will fall back to defaults.
+  * Changed: drop order fusion from time in Optimus (#1232).
+    The removed field from the config was named as "logistic" function.
+    This weighted function no longer needed and even considered harmful.
+  * Fixed: handle tasks correctly in case of worker reload (#1188).
+  * Fixed: add to matching orders existing ones in Optimus (#1248).
+    Previously they were added but then immediately filtered out, because those
+    orders are ASKs, not BIDs.
+
+ -- Evgeny Safronov <division494@gmail.com>  Wed, 01 Aug 2018 11:05:01 +0300
+
+sonm-core (0.4.5) unstable; urgency=low
+
+  * Added: deployment scripts for livenet (#1087).
+  * Added: show Ethereum balance on live network (#1203).
+    CLI is able to print balance also in Ethereum (for Masterchain).
+  * Added: assign tags in Optimus orders (#1209).
+  * Added: gas limits in blockchain API (#1200).
+  * Added: SNM token transfer for sidechain.
+    This commit allows to transfer tokens from the logged in account to another
+    address in the Sidechain.
+  * Removed: drop sqlite3 support in DWH (#1201).
+  * Changed: log order id when creating ask plans in Optimus (#1183).
+  * Changed: worker's status handle available for anyone (#1193).
+  * Changed: licence changed to GPLv3.
+  * Changed: complete Node refactoring (#1202).
+    Fixed race conditions while failed to start some parts of the Node
+    servers. For example when REST server failed to start there was resource
+    leakage.
+  * Changed: added default sort to GetWorkers DWH (#1214).
+  * Changed: ping worker before deal (#1196).
+    Now node will try to connect to the worker before opening deal (both
+    OpenDeal and QuickBuy). If a worker is not responding to the status
+    request - deal will not be opened and user will be noticed about worker
+    unavailability. User can force deal opening with the `--force` flag passed
+    to related CLI's sub-commands.
+  * Fixed: classify for all orders, not only matching in Optimus (#1180).
+  * Fixed: assign created timestamp for worker's own orders in Optimus (#1184).
+  * Fixed: properly cut orders with 0 GPU count in Optimus (#1185).
+  * Fixed: DWH proper exit (#1167).
+  * Fixed: keep task-to-ask-plan data till the deal is finished (#1190).
+    When the container dies, or the task is stopped we keep all the task's data
+    until the deal is finished, but we don't keep the task-to-ask-plan data
+    deleting  in ReleaseTask method. So when we ask for logs or any  other data
+    on an already stopped container.
+    This patch proposes keeping this info until the deal is closed, so we can,
+    for instance, still ask for logs on a stopped container.
+  * Fixed: proper logs following (#1206).
+  * Fixed: ignore orders with zero price in Optimus (#1204).
+  * Fixed: hasActiveCR status for deals in DWH (#1215).
+  * Fixed: ignore conflicts on AddedToBlacklist events (DWH).
+  * Fixed: oracle config (#1222).
+  * Fixed: close puncher after dialing (#1224).
+    This should prevent fd leak in Node.
+  * Fixed: print ask plan tags as strings (#1226).
+    This fixes the previous ask-plan printing behaviour where the "tag" field
+    was printed as a byte array, which is not human-readable.
+    This is done via type erasure hack with reflection. The only reason this
+    is done this way is not to break the backward compatibility.
+
+ -- Evgeny Safronov <division494@gmail.com>  Tue, 24 Jul 2018 13:11:23 +0300
+
+sonm-core (0.4.4) unstable; urgency=low
+
+  * Added: blacklist support in Optimus (#1175).
+    This change activates blacklists support in Optimus.
+    Now orders whose author is in worker's blacklist are now filtered out.
+    The same thing happens at the opposite: when the worker's address is in
+    the order's blacklist.
+  * Changed: better error handling for the cli (#1152).
+  * Changed: cli can now read it's config from --config flag (#1162).
+  * Changed: adds node_addr config variable to cli (#1163).
+  * Changed: no longer strip binaries (#1170).
+    This allows to debug binaries via debuggers like delve.
+  * Changed: Optimus decomposition (#1165).
+    Two-way optimization algorithms introduced here. Its main aim is to
+    reduce false-positive ask-plan creation. One way to achieve this is to
+    do optimization for both virtual devices and for natural ones.
+    Preparing worker input such as fetching its devices and ask-plans are now
+    performed concurrently to save some time. Its duration is limited using
+    new option: "prelude_timeout".
+    Fetching orders from the DWH is now performed on-demand, however caching
+    still exists.
+  * Changed: disable Node's REST encryption (#1173).
+  * Fixed: relay check matching node (#1046).
+    It might be the case that cluster reconfigures between Discover and
+    Handshake; this PR checks that we only work with appropriate peers.
+    It also adds dial retries for clients that experienced Discover/Handshake
+    inconsistency.
+  * Fixed: properly join host with port everywhere (#1168).
+    In case of IPv6 addresses it properly wraps the given address with [] braces.
+  * Fixed: avoid extra request for worker if user is not consumer (#1172).
+    This commit adds checking that current user's key is a consumer key,
+    if so - the node will try to connect to the related worker using NPP,
+    otherwise - skip connection.
+  * Fixed: spurious continuum devastation (#1177)
+    This fixes a bug in the Relay server, when it suddenly devastates the
+    continuum, returning 0.0.0.0 on any discovery request.
+    Also it fixes a bug introduced in #1046, when an improperly configured node
+    stopped to work.
+
+ -- Evgeny Safronov <division494@gmail.com>  Mon, 09 Jul 2018 17:00:57 +0300
+
+sonm-core (0.4.3) unstable; urgency=low
+
+  * Changed: increase ulimit for relay, rv and dwh (#1155).
+  * Changed: enable pprof servers on Rendezvous and Relay (#1156).
+  * Fixed: expand keystore path passed via flags (#1149).
+  * Fixed: process certificate/change request events in order (DWH) (#1150).
+  * Fixed: handle temporary network errors in Relay (#1154).
+    This fixes a bug when Relay server finished accepting new connections
+    when a temporary error occurs, such as EMFILE.
+    Now it will sleep for some period of time, but still interrupting on
+    non-recoverable error. This is the same how gRPC handles this.
+    Also the entire server now will stop on such non-recoverable errors instead
+    of waiting for interruption signal.
+
+ -- Evgeny Safronov <division494@gmail.com>  Tue, 03 Jul 2018 16:55:19 +0300
+
+sonm-core (0.4.2) unstable; urgency=low
+
+  * Fixed: default configs for all published components now should be pointed
+    to livenet endpoints instead of testing ones.
+
+ -- Evgeny Safronov <division494@gmail.com>  Sat, 30 Jun 2018 15:43:23 +0300
+
+sonm-core (0.4.1) unstable; urgency=low
+
+  * Added: gate with daily limit and freeze (#1062).
+  * Added: DWH extended validators (#1063).
+  * Added: ask-plan cancellation in Optimus (#1072).
+    This change activates ask-plan cancellation mechanism in Optimus.
+    It works the following way. Periodically Optimus scans workers it manages
+    and determines whether some ask-plans can be replaced in the nearest
+    future. If so - it calculates virtual free devices and tries to optimize
+    the new orders set (including already existing) to determine which
+    ask-plans are required to be replaced.
+  * Added: dry-run option in Optimus (#1078).
+    When activates Optimus will not create ask plans, but continues doing the
+    rest calculations instead. Useful for debugging.
+  * Added: uptime in Relay metrics (#1086).
+    Now Relay will return its uptime while answering for its metrics handle.
+  * Added: worker debug state (#1084).
+    This PR adds handle to worker to retrieve useful debugging info, e.g.
+    current resource scheduler state and salesman state.
+  * Added: gate commission (#1097).
+  * Added: feat: contract registry (#1110).
+    This PR replaces static smart contract addresses with contract registry
+    smart contract, which is loaded on start and caches all dependant addresses.
+  * Added: ability to drop benchmark cache (#1115).
+  * Added: oracle (#1082).
+    This implementation works through MultiSig contract.
+  * Added: add ask plan timestamps (#1134).
+    This PR adds creation timestamp orderPlaced timestamp and function to get
+    time for which order has not been sold, which can be useful for Optimus.
+  * Added: cancel stale ask-plans on Optimus (#1146).
+    Note, that failed cancellation does not break current bot's epoch.
+  * Changed: flexible benchmarks (#1066).
+    This PR allows worker to perform and cache benchmarks separately for each device
+    and enables parallel benchmarking for GPU.
+  * Changed: decompose components logic in Optimus (#1071).
+    This change allows to create multiple worker clients with different account settings.
+  * Changed: simplify weight formula in Optimus (#1077).
+    Previously a quite complicated motivation was used to calculate order
+    weights. It was hard to understand, and een harder to debug.
+    Now we use a simple predictedPrice/price as a criteria of order's
+    attractiveness.
+  * Changed: more verbose cmd errors in Optimus (#1092).
+  * BREAKING Changed: extend NPP identifier with protocol (#1104).
+    This allows to specify some protocol you want to publish/resolve as the
+    Rendezvous allows. It is required for further NAT traversal extensions.
+    What is changed: not relay protocol allows to specify "protocol" field
+    in order to match between different protocols for the same peer ID.
+    In both Relay and Rendezvous meeting groups are now associated with
+    complex string representation a-la URI.
+    This is the BREAKING change. Both Rendezvous, Worker and Node must be
+    updated. Relay, however, does not need to.
+  * Changed: update task.yaml example (#1138).
+  * Changed: show GPU hashes in device list (#1139).
+  * Changed: change benchmark names in cli output (#1142).
+  * Fixed: Relay server tracking (#1047).
+    This PR fixes a Relay bug: connecting servers weren't track'ed on Handshake.
+  * Fixed: build DRI module on non-unix (#1074).
+  * Fixed: properly forward "expose" section in Worker (#1076).
+    This fixes forgetting "expose" section while forwarding it from start task request to a container.
+    Also a tiny test added to check whether the task config is parsed properly.
+  * Fixed: proper reference parsing (#1075).
+    After this fix Worker will use proper reference parsing to detect digested images.
+  * Fixed: benchmark processing copy paste (#1079).
+  * Fixed: treat GPU count in Optimus as min (#1083).
+    We have a special business crutch, which forced us to treat GPU count
+    benchmark as a maximum allowed number of GPUs to match bid with ask, i.e.
+    if a bid requires for example 2 GPUs a worker can sell either 1 or 2 of
+    any matching its GPUs.
+    This commit inverts this logic to the default marketplace logic. No we
+    treat such benchmark as a minimum required number of GPUs.
+  * Fixed: properly process price for validators (#1085).
+  * Fixed: properly handle zero GPU benchmark (#1088).
+    This fixes a bug where Optimus fails to fit GPU benchmarks with some of
+    them equal zero.
+  * Fixed: deploy list contract (#1080).
+  * Fixed: Optimus will now set identity level (#1091).
+  * Fixed: enable TCP keep-alive for Relay clients (#1095).
+    Setting TCP keepalive is strictly suggested, because in case of mobile
+    devices the network can be reconfigured multiple times between connection
+    attempts.
+    However if the network was silently changed or the connection was lost or
+    the other side was kernel-panicked no FIN/RST will be delivered to us,
+    which leads to infinite (well, 24-hour) hanging.
+  * Fixed: use proper market API in Optimus (#1099).
+    Accidentally we used gRPC API to the DWH instead of blockchain API.
+  * Fixed: benchmark casting precision issue (#1101).
+  * Fixed: skip non-dir files when observing /sys/class/drm (#1106).
+  * Fixed: proper check for worker availability for the deal (#1102).
+    This commit adds a check that worker is available when the user making
+    deal with `quick-buy` handle.
+    Also, this commit remove a message that warns the user about the worker
+    inaccessibility when showing deal list.
+  * Fixed: case insensitive name search for profiles (DWH) (#1108).
+  * Fixed: cli login must ask for default key's pass (#1100).
+    This commit fixes a bug which can happen in such case:
+    key storage by given path already have a key but the config is empty.
+    Previously, cli marked the first available key as default one without checking a password
+    (user is able to decrypt their key), and also **does not** writes the state into the `cli.yaml`.
+    Now `cli login` asks for a password for the first key (if not provided),
+    and then update `cli.yaml` if decryption is successful.
+  * Fixed: increase timeout for deposits command (#1113).
+    This commit increases timeout for `sonmcli token deposit`
+    method. The average time of command execution is about 100s with
+    a default timeout of 60s. So for a user it looks like that command
+    is always failing.
+  * Fixed: limit min number of orders for optimization in Optimus (#1118).
+  * Fixed: proper GPU mem benchmark handling in Optimus (#1129).
+  * Fixed: transaction like consumption in Optimus (#1135).
+    When combining orders into a device manager, sometimes, when further
+    benchmarks did not fit in the set, Optimus stole those resources, making
+    all following attempts to fail with resource exhausted error.
+    This commit fixes that behaviour.
+  * Fixed: proper value in status channel (#1145).
+    This PR fixes behaviour when deal was finished, but task resources were not
+    released as status event was not delivered via status channel.
+
+ -- Evgeny Safronov <division494@gmail.com>  Thu, 28 Jun 2018 15:14:41 +0300
+
+sonm-core (0.4.0-rc1) unstable; urgency=low
+
+  * Added: Optimus now can filter by counterparty (#977).
+  * Added: DWH orders blacklist filters (#978).
+  * Added: maintenance for worker (#960).
+    This introduces maintenance feature for worker.
+    The `./sonmcli maintenance` accepts time point or duration to set maintenance on worker.
+    The `./sonmcli next-maintenance` show the time of next planned maintenance.
+    All orders durations are being adjusted according to maintenance point.
+    After maintenance point all spot deals are closed and all orders are removed.
+  * Added: quick buy for cli and node (#990).
+    This adds an ability to perform quick buy for given ASK order on market.
+  * Added: increase/decrease approval token functions (#1010).
+  * Added: multi-sig wallet (#1011).
+  * Added: order purge handle for cli and node (#997).
+  * Added: optimus price prediction (#1030).
+    This allows autosell bot to predict its price based on previous learning
+    iteration. It is required for further canceling orders depending on its
+    predicted market price.
+  * Added: profile management for cli and node (#1002).
+  * Added: AnyUserID field for DealsRequest in DWH (#1031).
+    This introduces a new search field to DealsRequest: AnyUserID. If provided,
+    supplierID, consumerID, and masterID fields are ignored.
+    Any of the mentioned IDs must match the provided value.
+  * Added: contracts freezing (#1029).
+  * Added: add deploy list contract (#1035).
+    Smart contract with array of allowed addresses, which may deploy contracts.
+  * Added: deposit-withdraw for node and cli (#986).
+    This adds able to transfer tokens between masterchain and SONM sidechain.
+  * Added: utilize hostname for relay (#1045).
+    This change allows to utilize specifying hostnames as a relay address,
+    increasing stability.
+    Previously such hostname was resolved once at construction time and the
+    relay client tried to connect to the resolved TCP addresses even if some
+    of them are already down.
+    Now each time a client requires new connection hostname resolution occurs.
+    All this allows dynamic addition/removal backends under the DNS.
+    Of course we try to connect to all returned endpoints.
+  * Added: allowance handle for node and cli (#1050).
+  * Added: kill option for market contract (#1049).
+    This implements destroying of contract. It also returns all frozen funds
+    to owner multisig.
+    Needs to prevent funds locking while some bug found if any.
+  * Changed: reworked benchmarks in market (#964).
+    Now we can place orders with any count of benchmarks, but still not more
+    than we support.
+  * Changed: store netflags in dynamic array on market (#971).
+    Now netflags stores in dynamic array. We can update num of netflags without
+    both breaking API and redeploy market.
+  * Changed: DWH startup refactoring (#929).
+    Fixed an minor bug - DWH could crash with segfault after a SIGINT at the
+    very startup.
+  * Changed: better logs in worker, while requesting approve (#980).
+  * BREAKING Changed: implemented GetBlacklistsContainingUser for DWH.
+    This is a BREAKING change.
+  * Changed: get profile level from contracts (#989).
+  * Changed: variable benchmarks in DWH (#984).
+    This allows DWH to track current number of benchmarks on Market and handle
+    changes properly.
+  * Changed: return relay error to the upper layer (#1007).
+    This change allows to see what exactly was wrong when a Relay failed to
+    establish a connection.
+    In conjunction with the #1006 this greatly improves debugging and system
+    reaction.
+  * Changed: create change request with only price or only duration (#1019).
+    Previously, if a user wants to set the new deal price he was forced to
+    explicitly set both params: new price and old duration. This adds able to
+    propose changes to only one param of a deal.
+  * Changed: emulate TCP reaction when using relay (#1006).
+    This change improves reaction for connections established using Relay.
+    For servers there is no reconnections (except every 24 hours), while for
+    clients there an immediate reaction with human-readable error.
+  * Changed: print order's tag if present in order status CLI (#1032).
+  * Changed: show message if worker has no active tasks (#1037).
+  * Changed: implicitly set allowance for market on sidechain (#1042).
+    This hook checks and sets allowance for market to practical infinity on every
+    method call which requires allowance.
+  * Changed: do not apply whitelist to identified consumers (#1040).
+    This takes consumer identity level in concern. If customer has at least
+    IDENTIFIED level whitelist checking doesn't take place.
+  * BREAKING Changed: specify worker settings in Optimus config (#1054).
+    Now it is possible to define some worker specific settings in the autosell
+    bot config.
+    For example now we can specify epoch interval, where the bot scans
+    worker's resources and tries to sell them.
+  * Changed: bind ask plan storage key to market address (#1052).
+  * Changed: spot-only orders for Optimus (#1061).
+    Since now Optimus can sell only for spot deals, with zero duration.
+  * Fixed: unwrap error in puncher (#966).
+  * Fixed: sort GPU to prevent hash changes and re-benchmarking (#963).
+  * Fixed: Optimus should now properly cut minimum RAM (#972).
+    This fixes a bug where a minimum number of some criteria (for example) RAM
+    was too low than the minimum one by one. This is caused by loosing
+    precision while converting to float64 and vice-versa - fixed by ceiling
+    the result.
+    Also found and fixed a bug which caused the Optimus to over-cut celling
+    plans, because of invalid math - I used current benchmarks for calculating
+    relational criteria, while lower bounds are calculated against total
+    devices. Now we use initial benchmarks for this case.
+  * Fixed: ceil everything in Optimus (#974).
+    This applies previous changes to every other data consumer in the autosell
+    bot, so it prevents losing precision while conversing
+    from uint64 -> float -> uint64 while doing math.
+  * Fixed: fix and refactor netflags (#962).
+    This removes odd bool slices conversions in the netflags providing common
+    interface to simple uint64.
+  * Fixed: update deal after DealChangeRequestAccepted in DWH.
+  * Fixed: rework all arithmetic to safe (#979).
+    A common protection from overflow.
+  * Fixed: log master addr as string, not bytes (#982).
+  * Fixed: remove finished benchmark containers from Overseer (#981).
+  * Fixed: update deals constantly to prevent caching stale data (#983).
+  * Fixed: proper cli login behaviour (#992).
+    This fixes two bugs: now we do not mark the key as default if there is
+    only one key is present into keystore.
+    Also now `sonmcli login` asking for pass-phrase, then trying to decrypt key
+    and mark it as default only if decryption was successful.
+  * Fixed: incorrect refund when deal closes in Bill transaction (#991).
+  * Fixed: autosell bot should now properly list cut ask plans (#999).
+  * Fixed: store certificate id in DWH (#1001).
+  * Fixed: allow to search zero benchmarks in DWH (#995).
+  * Fixed: possible segfault while checking netflags for converse implication.
+  * Fixed: proper image load (#1016).
+    This fixes `sonmcli tasks push` handle, by using the proper Docker
+    method (Push instead of Import, which respects multiple layers as the
+    opposite command `docker save` produces).
+    Note that this is a BREAKING change. The CLI must be updated.
+  * Fixed: do not spool existing images (#1017).
+    This fixes a bug when it's impossible to start a previously pushed image
+    without it being in the Docker Registry.
+  * Fixed: do not spam warnings when no rendezvous specified (#1005).
+    This should remove weird warnings like: `failed to construct a puncher {"error": "failed to connect to []"}`.
+  * Fixed: list all images, remove excessive logging (#1018).
+    There is a situation when you push 2 images one based on another. In this
+    case, docker will count the first one as intermediate image and does not
+    include in the listing, this fixes this behavior.
+  * Fixed: properly load sigmoid settings from the config in autosell bot (#1025).
+  * Fixed: proper sigmoid implementation (#1026).
+    Autosell bot should no longer fall into millions of NaNs after calculating
+    relative order weights.
+  * Fixed: do not null order created timestamp (#1027).
+    When DWH was young it was unable to return properly created timestamp, we
+    inited it ourselves.
+    Now times change, but those empty initialization was forgotten and cause
+    strange autosell bot behaviour.
+    This removes such initialization.
+  * Fixed: notify consumer about the worker availability (#1028).
+  * Fixed: make relay IPv6 ready (not really) (#1033).
+    In case of being run on IPv6 it improperly answers to a discover request
+    with address not surrounded with braces.
+  * Fixed: get task list only for consumer's deals (#1024).
+    We have a situation when `sonmcli task list` is called from the supplier (or master) key.
+    At first, to obtain tasks a client needs to load their active deals.
+    And then query a tasks list for each deal. So if you a supplier,
+    you cannot receive the list by the deal because of ACLs is applied.
+    This PR fixes this case by checking that you're a consumer for active deals,
+    otherwise, a client will not use that deal for querying tasks.
+  * Fixed: optimus should now track incoming network (#1053).
+    Previously autosell bot could match more than a single order with incoming
+    network required. Because we do not allow such behaviour it led to
+    multiple errors while trying to create sell plans.
+    This change explicitly disables incoming network after a first matching
+    orders found.
+  * Fixed: invalid netflag filtering in Optimus (#1064).
+    Now Optimus will check for netflags inclusion using free devices instead of
+    just devices.
+
+ -- Evgeny Safronov <division494@gmail.com>  Wed, 20 Jun 2018 13:52:42 +0300
+
+sonm-core (0.4.0-alpha3) unstable; urgency=low
+
+  * Added: quick buy with duration (#957).
+  * Changed: pretty-print workers list (#921).
+  * Changed: cold-start auto block number in DWH (#930).
+    This change makes use of CustomEthereumClient's GetLastBlock() method to
+    automatically determine when to build indices in cold start mode.
+  * Changed: use blacklists in GetMatchingOrders in DWH (#939).
+  * Changed: map gRPC validation error into HTTP invalid argument in REST
+    bindings (#952).
+  * Changed: attempt to log everything in NPP (#953).
+    More logs while connecting using NPP, log details in the Puncher, log
+    addresses and protobuf messages as JSON instead of <"\unreadable strings\">.
+    NPP errors now filter duplicate error messages, while attempting to punch
+    a NAT.
+    Also some typos fixed.
+  * Changed: extend blacklisting feature (#955).
+    Now you can blacklist both master and worker.
+  * Fixed: proper logs processing on CLI side (#936).
+    This includes proper parsing of hijacked binary logs, restore `type` flag
+    functionality and ability to prepend stdout and stderr with corresponding
+    prefixes.
+  * Fixed: use ask-plan hashing instead of hardware hashing.
+    Now we use indexes from ask-plan to determine gpu hash instead of hardware.
+    This allows to use GPU indexes as they appear in ask-plan rather than in
+    hardware.
+  * Fixed: wrong store key in worker config (#941).
+  * Fixed: proper format in NetworkSpec printer (#943).
+  * Fixed: proper container cleanup on finished deal (#944).
+    Fixed a situation when worker did not get deal notification when ask-plan
+    was scheduled for deletion.
+    Also now worker uses SIGKILL with no regret for tinc as it does not respond
+    to ContainerStop anyway.
+    This all results in a proper cleanup of the deal containers and resources
+    release.
+  * Fixed: initialize logger in NPP (#948).
+  * Fixed: do not hang on Serve error (#947).
+  * Fixed: do not try to use closed deals in Node (#945).
+  * Fixed: Node should no longer segfault while working with keystore (#942).
+  * Fixed: possible infinite hanging while punching multiple private addresses.
+  * Fixed: convert duration to nanoseconds in Optimus (#958).
+    Optimus should no longer create ask plans with duration more than one second.
+  * Fixed: profile stats and updates in DWH.
+    This fixes a bug that happens in the following situation:
+      - An order is created for an unknown profile (i.e., AuthorID/MasterID has
+        no certificates), so ActiveAsks/ActiveBids is not incremented for that
+        profile.
+      - A profile is created for that order's AuthorID/MasterID.
+      - Order's status changes to INACTIVE, we decrement the already known
+        AuthorID/MasterID profile's ActiveAsks/ActiveBids and get a negative
+        value.
+    The fix goes as follows: when creating a new profile, we count active asks
+    and bids and store the new profile with relevant data.
+  * Fixed: insert-or-update-validators in DWH (#965).
+  * Fixed: GetMatchingOrders Blacklists and CounterpartyID in DWH (#967).
+
+ -- Evgeny Safronov <division494@gmail.com>  Fri, 08 Jun 2018 23:27:48 +0300
+
+sonm-core (0.4.0-alpha2) unstable; urgency=low
+
+  * Added: unimplemented methods of profiles in smart contracts (#923).
+  * Added: debug worker via pprof on demand (#928).
+  * BREAKING: DWH now saves MasterID field for orders (#912).
+    You should recreate your DWH tables if you use your custom installation.
+  * BREAKING: simplify tokens api (#920).
+    Now the tokens api uses common.Address instead of string.
+    It should help with the common string-to-address casting problem.
+  * Changed: use custom Ethereum client everywhere in out internal API (#916).
+    This allows to obtain the last block number and the receipt of mined
+    transaction.
+  * Fixed: incorrect work of QuickBuy smart contract function - wrong
+    counterparty was used (#906).
+  * Fixed: expand ~ ($HOME) while creating accounts (#907).
+  * Fixed: worker defaults in the config are now more relevant (#908).
+  * Fixed: Optimus should no longer crash when the training set is degenerated (#911).
+  * Fixed: NPP puncher should now properly extract incoming connections (#918).
+    This fixes infinite connection hanging from Node to Worker.
+  * Fixed: save keystore path if overridden by flag (#924).
+    Previously when using `sonmcli login --keystore` with no keys in it, a new keystore
+    was created with saving its password as a default. But the path itself was not saved.
+    This change fixes that issue.
+  * Fixed: limit minimum storage bound in Optimus (#926).
+
+ -- Evgeny Safronov <division494@gmail.com>  Sun, 03 Jun 2018 22:17:06 +0300
+
+sonm-core (0.4.0-alpha1) unstable; urgency=low
+
+  * Added: NAT punching.
+    This adds the full NAT Punching Protocol implementation, allowing to
+    connect Hub and its clients, including workers, even if they are located under
+    a single or several NATs.
+    Also this commit adds a Rendezvous server, which acts as an intermediate
+    metadata exchange point.
+    NPP is a protocol aimed to achieve mutual address resolution for both client
+    and server. This is especially useful where there is no guarantee
+    that both peers are reachable directly, i.e. behind a NAT for example.
+    The protocol allows for servers to publish their private network addresses
+    while resolving their real remove address. This information is saved under
+    some ID until a connection held and heartbeat frames transmitted.
+    When a client wants to perform a connection it goes to this server, informs
+    about its own private network addresses and starting from this point a
+    rendezvous can be achieved.
+    Both client and server are informed about remote peers public and private
+    addresses and they may perform several attempts to create an actual p2p
+    connection.
+    By trying to connect to private addresses they can reach each other if and
+    only if they're both in the same LAN or VLAN.
+    If a peer doesn't have private address, the connection is almost guaranteed
+    to be established directly from the private peer to the public one.
+    If both of them are located under different NATs, a TCP punching attempt can
+    be performed.
+    At last, when there is no hope, for example in the case of Symmetric NAT, a
+    special relay server can be used to forward the traffic.
+    Servers should publish all of possibly reachable endpoints for all protocols
+    they support. Its Ethereum ID is determined automatically through our peer
+    authentication mechanism.
+    Clients should specify the desired protocol and ID for resolution. For both
+    server and client their public endpoint is determined automatically.
+    Currently only TCP connection establishment is supported.
+    The implementation requires the underlying TCP/IP stack to support
+    SO_REUSEADDR and SO_REUSEPORT options, because for successful NAT
+    traversal it's crucial to reuse the same src ip:port to be routed
+    through the same external ip:port each time.
+    Thus, the minimum linux kernel version is 3.9. About other platforms
+    it's unclear.
+    The other hack is the simultaneous TCP open, which unfortunately requires
+    tons of fds allocated on each connect attempt, so prepare to enlarge your
+    open files limits.
+  * Added: overlay networks support for containers using tinc and/or L2TP.
+  * Added: tinc overlay driver (#512).
+    The tinc is a Virtual Private Network daemon that uses tunnelling and
+    encryption to create a secure private network between hosts on the Internet.
+    This addition allows to configure overlay network for containers
+  * Added: docker l2tp driver (#490).
+    This addition allows to configure overlay L2TP network for containers,
+    forcing them to join to the specified VPN.
+  * Added: allow worker to manage single GPUs (#491).
+    This includes adding GPU Tuner that collects and keep info about available GPUs
+    and related DRI devices. We use DRI device representation, related /sys/class parsers
+    for device discovering, PCI bus ID extractor.
+    The tuner now can bind devices into the container by their IDs.
+    Also added `lsgpu` tool for GPU fast-checking on a various systems.
+  * Added: allow to obtain peers by ethereum id (#507).
+  * Added: feat: NPP Relay server.
+    This introduces the Relay server as a part of NPP. Also it extends the NPP library to work
+    with it transparently like with a typical TCP socket.
+    The Relay server is a last resort tool used to penetrate the NAT in case of
+    over-paranoid network configurations, such as Symmetrical NAT or manual iptables
+    hacks. When NPP gives up it acts as a third-party server which transports TCP
+    traffic in the userland.
+    Briefly what it allows - is to establish a TCP connection between two hosts with
+    private IP addresses.
+    There are several components in the Relay server, which allows to unite several
+    servers into the single cluster, performing client-side load-balancing with the
+    help of servers.
+    After discovering the proper Relay endpoint a HANDSHAKE message is sent to
+    publish the server. Internally an ETH address provided is verified using
+    asymmetrical cryptography based on secp256k1 curves.
+    At the other side the peer client performs almost the same steps, instead of its
+    own ETH address it specifies the target ETH address the client wants to connect.
+    When at least two peers are discovered the relaying process starts by simply
+    copying all the TCP payload without inspection. Thus, an authentication between
+    two peers is still required to keep the traffic encrypted and avoid MITM attack.
+    Several Relays can be united in a single cluster by specifying several endpoints
+    of other members in the cluster the user want to join. Internally a SWIM
+    protocol is used for fast members discovering and convergence. An optional
+    message encryption and members authentication can be specified for security
+    reasons.
+    Relay servers obviously require to be hosted on machines with public IP address.
+    However additionally an announce endpoint can be specified to host Relay servers
+    under the NAT, but with configured PMP or other stuff that allows to forward
+    incoming traffic to the private network.
+  * Added: build deb-package for Rendezvous and Relay (#533).
+  * Added: REST interface for node (#535).
+    Flexible REST interface build on top of gRPC services reflection.
+  * Added: worker's benchmarks (#530).
+    This adds able to measure Worker's performance by executing
+    a bunch of benchmarks. Some of the benchmarks are present as statically-coded
+    functions that can simply pick-up a value from system (how many bytes of RAM
+    or CPU cores count). More complex measurement is implemented as Docker-containers
+    which must return a JSON string with the results.  It allows implementing
+    some amount of custom logic for each hardware group.
+    To keep the Worker's state, the boltdb was added as a simple storage.
+  * Added: read memory limit from CGroup (#549).
+    Previously we used total amount RAM on the host system as an available memory for scheduling.
+    But resources for containers may be limited by a parent CGroup settings.
+    This changes how available memory amount is measured.
+    The lesser value of `total RAM on host, a limit set for CGroup` is used.
+  * Added: collect memory amount for GPU devices (#556)
+    This adds able to obtain memory size for GPU devices. Discovered values uses as metrics for
+    the `mem-gpu` benchmark.
+  * Added: new blockchain API (#569).
+  * Added: feat: auto request/response validation (#585)
+    This commit activates gRPC request/response auto-validation by injecting an interceptor.
+    Those requests/responses that require validation can optionally implement an
+    implicit `Validate() error` function that will be called before request starts being processed
+    and before response passed to the gRPC internals.
+  * Added: show devices with benchmarks (#575).
+    This improves device list shown to Worker's owner. The list includes new device
+    groups (network, storage). Also, benchmarks results for every device group is shown.
+  * Added: ask-plan protobuf entity (#583).
+    This introduces new AskPlan entity to be used in worker for placing ask orders on market.
+    Intended to use instead of slot.
+  * Added: ability to join networks using JoinNetwork command (#599).
+  * Added: CLI command to show current balance (#608).
+  * Added: show network capabilities into worker's devices (#611).
+  * Added: DWH (#548). DWH is a traditional abbreviation for Data Warehouse.
+    Typically, it is a component that can receive data from various sources, store it, generate
+    additional data slices (built from obtained data), and submit this data to external consumers.
+    In SONM environment, the DWH is a node that keeps a copy of the data that has passed through
+    the Sidechain and provides fast access mechanisms to this data in a convenient way for the end
+    user (client applications and other SONM platform infrastructure components).
+  * Added: create order from `bid.yaml` (#607).
+    This adds able to read BID orders from the yaml spec and place them on Marketplace.
+  * Added: deal matcher.
+  * Added: ETH load testing tools.
+  * Added: master-worker relationships (#775).
+  * Added: ability to save cli config (#790).
+  * Added: worker admin (#807).
+    This commit allows to specify admin ETH key for a worker to be able
+    to have access to worker management tools.
+  * Added: autosell bot.
+    This bot acts as a separate application and attaches to a specified workers, managing them
+    by scanning available resources and trying to sell them using marketplace scanning with
+    minor help of machine learning.
+  * Added: introduce multi-keystore (#785)
+    This adds a keystore implementation which can operate on multiple ethereum keys.
+  * Added: add oracle contract (#808).
+  * Added: CLI can now purge all ask-plans (#818).
+  * Added: manage blacklists from Node (#766).
+  * Added: container restart policy (#830).
+  * Added: able to parse USD price without space (#834).
+  * Added: multi-market token (#825).
+  * Added: manually allow to expose container ports (#850).
+  * Added: collect disk space info (#880).
+  * Changed: update configs and binaries location (#504).
+    Now we keep all configs into `etc` directory, while all binaries are now located in
+    the `target` directory.
+    Now deb package with node creates the `sonm` user account on install, node runs under that
+    user.
+    Also added OS type and arch into target binary name.
+  * Changed: integrate hub into miner (#527).
+    Previously hub was used for the following reasons: providing access for workers
+    without public IP; resource scheduling between workers; account association for
+    large installations
+    Currently NPP Allows us to work without public IP's, resource scheduling will be
+    done on per machine basis with help of blockchain and account integration will be
+    done via smart contract, so there is no reason to leave hub as an entity.
+  * Changed: merge worker and hub configs (#577).
+  * Changed: drop CLI interactors (#518).
+  * Changed: drop cluster (#560)
+    The `Cluster` entity was removed from the Hub, now `state` operates with
+    the `libkv.Storage` itself.
+  * Changed: complete Locator extermination (#568).
+  * Changed: update go-ethereum api to v.1.8.2 (#601).
+  * Changed: improve order and deal printers (#684).
+  * Changed: use dealID to detect corresponding worker when using task API (#686).
+    This drops supporting for hub address parameter into task API. Now we're using dealID as
+    counterpart identifier to resolve addresses and perform requests.
+  * Changed: configurable blockchain endpoints (#697).
+  * Changed: extend deal info with tasks and resources (#712).
+  * Changed: now smart-contracts are located in this repository.
+  * Changed: CLI now always requires --config flag (#744).
+  * Changed: make CLI commands more consistent (#786).
+    This changes CLI sub-commands semantic to follow the "entity-action" commands style.
+    Also, using non-plural words for commands names.
+
+ -- Evgeny Safronov <division494@gmail.com>  Fri, 30 May 2018 12:57:02 +0300
+
 sonm-core (0.3.3) unstable; urgency=low
 
   * Fixed: better logging for ask-plan processing (#469).

@@ -10,6 +10,9 @@ const (
 	ErrInvalidHandshake int32 = iota
 	ErrUnknownPeerType
 	ErrTimeout
+	ErrNoPeer
+	ErrWrongNode
+	ErrEmptyContinuum
 )
 
 type protocolError struct {
@@ -38,4 +41,16 @@ func errUnknownType(ty sonm.PeerType) error {
 
 func errTimeout() error {
 	return newProtocolError(ErrTimeout, fmt.Errorf("timed out"))
+}
+
+func errNoPeer() error {
+	return newProtocolError(ErrNoPeer, fmt.Errorf("no peer found"))
+}
+
+func errWrongNode() error {
+	return newProtocolError(ErrWrongNode, fmt.Errorf("peer connected to wrong node"))
+}
+
+func errEmptyContinuum() error {
+	return newProtocolError(ErrEmptyContinuum, fmt.Errorf("no nodes in the continuum"))
 }

@@ -19,19 +19,28 @@ const (
 	CPUCores    = 2
 	RamSize     = 3
 	StorageSize = 4
+	NetworkIn   = 5
+	NetworkOut  = 6
 	GPUCount    = 7
 	GPUMem      = 8
 
 	BenchIDEnvParamName = "SONM_BENCHMARK_ID"
 	CPUCountBenchParam  = "SONM_CPU_COUNT"
+	GPUVendorParam      = "SONM_GPU_TYPE"
 )
 
 type BenchList interface {
-	List() map[pb.DeviceType][]*pb.Benchmark
+	// Max returns the maximum benchmark ID in the list.
+	Max() uint64
+	ByID() []*pb.Benchmark
+	MapByDeviceType() map[pb.DeviceType][]*pb.Benchmark
+	MapByCode() map[string]*pb.Benchmark
 }
 
 type benchmarkList struct {
-	data map[pb.DeviceType][]*pb.Benchmark
+	byCode map[string]*pb.Benchmark
+	byType map[pb.DeviceType][]*pb.Benchmark
+	byID   []*pb.Benchmark
 }
 
 func (bl *benchmarkList) load(ctx context.Context, s string) error {
@@ -85,26 +94,45 @@ func (bl *benchmarkList) readResults(ctx context.Context, reader io.ReadCloser) 
 		return fmt.Errorf("cannot decode JSON response: %v", err)
 	}
 
+	var max uint64
+	for _, bench := range data {
+		if bench.ID > max {
+			max = bench.ID
+		}
+	}
+	bl.byID = make([]*pb.Benchmark, max+1)
+	for _, bench := range data {
+
+		if bench.ID >= uint64(len(bl.byID)) {
+			return fmt.Errorf("malformed benchmarks list json, have %d items, but found ID %d", len(bl.byID), bench.ID)
+		}
+		if bl.byID[bench.ID] != nil {
+			return fmt.Errorf("malformed benchmarks list json, duplicate id %d", bench.ID)
+		}
+		bl.byID[bench.ID] = bench
+	}
+
+	bl.byCode = data
 	for code, bench := range data {
 		key := bench.GetType()
 		bench.Code = code
 
-		_, ok := bl.data[key]
+		_, ok := bl.byType[key]
 		if ok {
-			bl.data[key] = append(bl.data[key], bench)
+			bl.byType[key] = append(bl.byType[key], bench)
 		} else {
-			bl.data[key] = []*pb.Benchmark{bench}
+			bl.byType[key] = []*pb.Benchmark{bench}
 		}
 	}
 
-	ctxlog.G(ctx).Debug("received benchmarks list", zap.Any("data", bl.data))
+	ctxlog.G(ctx).Debug("received benchmarks list", zap.Any("data", bl.byCode))
 	return nil
 }
 
 // NewBenchmarksList returns benchmark list from external storage.
 func NewBenchmarksList(ctx context.Context, cfg Config) (BenchList, error) {
 	ls := &benchmarkList{
-		data: make(map[pb.DeviceType][]*pb.Benchmark),
+		byType: make(map[pb.DeviceType][]*pb.Benchmark),
 	}
 
 	if len(cfg.URL) == 0 {
@@ -119,8 +147,27 @@ func NewBenchmarksList(ctx context.Context, cfg Config) (BenchList, error) {
 	return ls, nil
 }
 
-func (bl *benchmarkList) List() map[pb.DeviceType][]*pb.Benchmark {
-	return bl.data
+func (bl *benchmarkList) Max() uint64 {
+	max := uint64(0)
+	for _, benchmark := range bl.byID {
+		if benchmark.ID > max {
+			max = benchmark.ID
+		}
+	}
+
+	return max
+}
+
+func (bl *benchmarkList) ByID() []*pb.Benchmark {
+	return bl.byID
+}
+
+func (bl *benchmarkList) MapByDeviceType() map[pb.DeviceType][]*pb.Benchmark {
+	return bl.byType
+}
+
+func (bl *benchmarkList) MapByCode() map[string]*pb.Benchmark {
+	return bl.byCode
 }
 
 // ResultJSON describes results of single benchmark.

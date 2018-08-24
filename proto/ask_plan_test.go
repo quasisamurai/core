@@ -14,9 +14,10 @@ import (
 func TestAskPlanUnmarshallers(t *testing.T) {
 	data := []byte(`
 duration: 8h
-price: 23.73 SNM/h
+price: 23.73 USD/h
 
 blacklist: 0x8125721c2413d99a33e351e1f6bb4e56b6b633fd
+identity: anonymous
 
 resources:
   cpu:
@@ -59,9 +60,9 @@ resources:
 
 	assert.Equal(t, uint64(25*1024*1024), ask.Resources.GetNetwork().GetThroughputIn().GetBitsPerSecond())
 	assert.Equal(t, uint64(40e6), ask.Resources.GetNetwork().GetThroughputOut().GetBitsPerSecond())
-	assert.True(t, ask.Resources.GetNetwork().Overlay)
-	assert.True(t, ask.Resources.GetNetwork().Outbound)
-	assert.True(t, ask.Resources.GetNetwork().Incoming)
+	assert.True(t, ask.Resources.GetNetwork().GetNetFlags().GetOverlay())
+	assert.True(t, ask.Resources.GetNetwork().GetNetFlags().GetOutbound())
+	assert.True(t, ask.Resources.GetNetwork().GetNetFlags().GetIncoming())
 }
 
 func TestAskPlanIDsAndHashes(t *testing.T) {

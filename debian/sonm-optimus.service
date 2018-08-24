@@ -1,0 +1,14 @@
+[Unit]
+Description=SONM Optimus
+
+
+[Service]
+EnvironmentFile=/etc/default/sonm-optimus
+Type=simple
+ExecStart=/usr/bin/sonmoptimus --config=${CONFIG_PATH}
+Restart=on-failure
+
+
+[Install]
+Wants=network-online.target
+After=network.target network-online.target

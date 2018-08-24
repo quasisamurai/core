@@ -1,9 +1,10 @@
 package commands
 
 import (
+	"context"
+
 	pb "github.com/sonm-io/core/proto"
 	"github.com/sonm-io/core/util/xgrpc"
-	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 )
 
@@ -11,7 +12,7 @@ import (
 //
 // Note that `timeoutFlag`, `nodeAddressFlag` and `creds` are set implicitly because it is global for all CLI-related stuff.
 func newClientConn(ctx context.Context) (*grpc.ClientConn, error) {
-	return xgrpc.NewClient(ctx, nodeAddressFlag, creds)
+	return xgrpc.NewClient(ctx, nodeAddress(), creds)
 }
 
 func newWorkerManagementClient(ctx context.Context) (pb.WorkerManagementClient, error) {
@@ -57,4 +58,31 @@ func newTaskClient(ctx context.Context) (pb.TaskManagementClient, error) {
 	}
 
 	return pb.NewTaskManagementClient(cc), nil
+}
+
+func newTokenManagementClient(ctx context.Context) (pb.TokenManagementClient, error) {
+	cc, err := newClientConn(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return pb.NewTokenManagementClient(cc), nil
+}
+
+func newBlacklistClient(ctx context.Context) (pb.BlacklistClient, error) {
+	cc, err := newClientConn(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return pb.NewBlacklistClient(cc), nil
+}
+
+func newProfilesClient(ctx context.Context) (pb.ProfilesClient, error) {
+	cc, err := newClientConn(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return pb.NewProfilesClient(cc), nil
 }

@@ -1,6 +1,7 @@
 syntax = "proto3";
 
 import "bigint.proto";
+import "capabilities.proto";
 import "insonmnia.proto";
 import "timestamp.proto";
 
@@ -13,12 +14,16 @@ service Market {
     // CreateOrder places new order on the Marketplace.
     // Note that current impl of Node API prevents you from
     // creating ASKs orders.
-    rpc CreateOrder(Order) returns (Order) {}
+    rpc CreateOrder(BidOrder) returns (Order) {}
     // GetOrderByID returns order by given ID.
     // If order save an `inactive` status returns error instead.
+    // TODO: get rid of string ID #1237
     rpc GetOrderByID(ID) returns (Order) {}
     // CancelOrder removes active order from the Marketplace.
+    // TODO: get rid of string ID #1237
     rpc CancelOrder(ID) returns (Empty) {}
+    // Purge remove all active orders from marketplace
+    rpc Purge(Empty) returns (Empty) {}
 }
 
 message GetOrdersReply {
@@ -32,14 +37,17 @@ enum OrderType {
 }
 
 enum OrderStatus {
-    ORDER_INACTIVE = 0;
-    ORDER_ACTIVE = 1;
+    ORDER_UNKNOWN = 0;
+    ORDER_INACTIVE = 1;
+    ORDER_ACTIVE = 2;
 }
 
 enum IdentityLevel {
-    ANONIMOUS = 0;
-    PSEUDONYMOUS = 1;
-    IDENTIFIED = 2;
+    UNKNOWN = 0;
+    ANONYMOUS = 1;
+    REGISTERED = 2;
+    IDENTIFIED = 3;
+    PROFESSIONAL = 4;
 }
 
 enum DealStatus {
@@ -56,29 +64,24 @@ enum ChangeRequestStatus {
     REQUEST_ACCEPTED = 4;
 }
 
+enum BlacklistType {
+    BLACKLIST_NOBODY = 0;
+    BLACKLIST_WORKER = 1;
+    BLACKLIST_MASTER = 2;
+}
+
 message Benchmarks {
-    uint64 CPUSysbenchMulti = 1;
-    uint64 CPUSysbenchOne = 2;
-    uint64 CPUCores = 3;
-    uint64 RAMSize = 4;
-    uint64 StorageSize = 5;
-    uint64 NetTrafficIn = 6;
-    uint64 NetTrafficOut = 7;
-    uint64 GPUCount = 8;
-    uint64 GPUMem = 9;
-    uint64 GPUEthHashrate = 10;
-    uint64 GPUCashHashrate = 11;
-    uint64 GPURedshift = 12;
+    repeated uint64 values = 1;
 }
 
 message Deal {
-    string id = 1;
+    BigInt id = 1;
     Benchmarks benchmarks = 2;
-    string supplierID = 3;
-    string consumerID = 4;
-    string masterID = 5;
-    string askID = 6;
-    string bidID = 7;
+    EthAddress supplierID = 3;
+    EthAddress consumerID = 4;
+    EthAddress masterID = 5;
+    BigInt askID = 6;
+    BigInt bidID = 7;
     uint64 duration = 8;
     BigInt price = 9;
     Timestamp startTime = 10;
@@ -90,18 +93,42 @@ message Deal {
 }
 
 message Order {
-    string id = 1;
-    string dealID = 2;
+    BigInt id = 1;
+    BigInt dealID = 2;
     OrderType orderType = 3;
     OrderStatus orderStatus = 4;
-    string authorID = 5;
-    string counterpartyID = 6;
+    EthAddress authorID = 5;
+    EthAddress counterpartyID = 6;
     uint64 duration = 7;
     BigInt price = 8;
-    uint64 netflags = 9;
+    NetFlags netflags = 9;
     IdentityLevel identityLevel = 10;
     string blacklist = 11;
     bytes tag = 12;
     Benchmarks benchmarks = 13;
     BigInt frozenSum = 14;
+}
+
+message BidNetwork {
+    bool overlay = 1;
+    bool outbound = 2;
+    bool incoming = 3;
+}
+
+message BidResources{
+    BidNetwork network = 1;
+    map<string, uint64> benchmarks = 2;
+}
+
+message BidOrder {
+    string ID = 1;
+
+    Duration duration = 2;
+    Price price = 3;
+    EthAddress blacklist = 4;
+    IdentityLevel identity = 5;
+    string tag = 6;
+
+    EthAddress Counterparty = 7;
+    BidResources resources = 8;
 }

@@ -3,12 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 
 	log "github.com/noxiouz/zapctx/ctxlog"
 	"github.com/sonm-io/core/cmd"
 	"github.com/sonm-io/core/insonmnia/logging"
 	"github.com/sonm-io/core/insonmnia/npp/relay"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -17,11 +17,10 @@ var (
 	appVersion  string
 )
 
-func start() {
+func start() error {
 	cfg, err := relay.NewServerConfig(cfgPath)
 	if err != nil {
-		fmt.Printf("Failed to load config file: %s\r\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to load config file: %s", err)
 	}
 
 	ctx := log.WithLogger(context.Background(), logging.BuildLogger(cfg.Logging.LogLevel()))
@@ -31,14 +30,29 @@ func start() {
 	}
 	server, err := relay.NewServer(*cfg, options...)
 	if err != nil {
-		log.S(ctx).Errorf("failed to construct a Relay server: %s", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to construct a Relay server: %s", err)
 	}
 
-	go server.Serve()
-	defer server.Close()
+	// Passing the context tells about server shutdown if so.
+	//
+	// There are two possible cases here:
+	// - User interrupts the server - then server is closed explicitly and
+	//   everything inside is cleared.
+	// - Server stops for some reason - then the context is notified about this
+	//   forcing interruption handler to return.
+	wg, ctx := errgroup.WithContext(ctx)
+	wg.Go(func() error {
+		return server.Serve(ctx)
+	})
+	wg.Go(func() error {
+		return cmd.WaitInterrupted(ctx)
+	})
 
-	cmd.WaitInterrupted()
+	if err := wg.Wait(); err != nil {
+		log.S(ctx).Infof("Relay server has been stopped: %v", err)
+	}
+
+	return nil
 }
 
 func main() {

@@ -1,6 +1,7 @@
 syntax = "proto3";
 
 import "insonmnia.proto";
+import "net.proto";
 
 package sonm;
 
@@ -31,6 +32,9 @@ message HandshakeRequest {
     // random select.
     // Should be empty for servers.
     string UUID = 4;
+    // Protocol describes the network protocol the peer wants to publish or to
+    // resolve.
+    string protocol = 5;
 }
 
 message DiscoverResponse {
@@ -49,6 +53,7 @@ message HandshakeResponse {
 service Relay {
     rpc Cluster(Empty) returns (RelayClusterReply) {}
     rpc Metrics(Empty) returns (RelayMetrics) {}
+    rpc Info(Empty) returns (RelayInfo) {}
 }
 
 message RelayClusterReply {
@@ -58,9 +63,20 @@ message RelayClusterReply {
 message RelayMetrics {
     uint64 connCurrent = 1;
     map<string, NetMetrics> net = 2;
+    uint64 uptime = 3;
 }
 
 message NetMetrics {
     uint64 txBytes = 1;
     uint64 rxBytes = 2;
+}
+
+// RelayInfo is a response returned from Info handle.
+message RelayInfo {
+    map<string, RelayMeeting> state = 1;
+}
+
+// RelayMeeting represents relay point.
+message RelayMeeting {
+    map<string, Addr> servers = 2;
 }

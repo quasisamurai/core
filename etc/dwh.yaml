@@ -1,8 +1,9 @@
-address: "127.0.0.1:15021"
+grpc_address: ":15021"
+
+http_address: ":15022"
 
 storage:
-  driver: "sqlite3"
-  endpoint: "target/dwh.db"
+  endpoint: "postgresql://localhost:5432/dwh?user=dwh&password=dwh&sslmode=disable"
 
 # blockchain-specific settings.
 ethereum:
@@ -11,12 +12,12 @@ ethereum:
   # passphrase for keystore
   pass_phrase: "any"
 
-
 blockchain:
-  eth_endpoint: "http://localhost:8545"
-# eth_endpoint: "https://private-dev.sonm.io"
+  blocks_batch_size: 500000
 
 logging:
   # The desired logging level.
   # Allowed values are "debug", "info", "warn", "error", "panic" and "fatal"
-  level: debug
+  level: "info"
+
+enable_rest: true

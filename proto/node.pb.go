@@ -25,27 +25,6 @@ var _ = proto.Marshal
 var _ = fmt.Errorf
 var _ = math.Inf
 
-type WorkerRelationshipStatus int32
-
-const (
-	WorkerRelationshipStatus_RELATION_UNAPPROVED WorkerRelationshipStatus = 0
-	WorkerRelationshipStatus_RELATION_APPROVED   WorkerRelationshipStatus = 1
-)
-
-var WorkerRelationshipStatus_name = map[int32]string{
-	0: "RELATION_UNAPPROVED",
-	1: "RELATION_APPROVED",
-}
-var WorkerRelationshipStatus_value = map[string]int32{
-	"RELATION_UNAPPROVED": 0,
-	"RELATION_APPROVED":   1,
-}
-
-func (x WorkerRelationshipStatus) String() string {
-	return proto.EnumName(WorkerRelationshipStatus_name, int32(x))
-}
-func (WorkerRelationshipStatus) EnumDescriptor() ([]byte, []int) { return fileDescriptor13, []int{0} }
-
 type JoinNetworkRequest struct {
 	TaskID    *TaskID `protobuf:"bytes,1,opt,name=taskID" json:"taskID,omitempty"`
 	NetworkID string  `protobuf:"bytes,2,opt,name=NetworkID" json:"NetworkID,omitempty"`
@@ -54,7 +33,7 @@ type JoinNetworkRequest struct {
 func (m *JoinNetworkRequest) Reset()                    { *m = JoinNetworkRequest{} }
 func (m *JoinNetworkRequest) String() string            { return proto.CompactTextString(m) }
 func (*JoinNetworkRequest) ProtoMessage()               {}
-func (*JoinNetworkRequest) Descriptor() ([]byte, []int) { return fileDescriptor13, []int{0} }
+func (*JoinNetworkRequest) Descriptor() ([]byte, []int) { return fileDescriptor9, []int{0} }
 
 func (m *JoinNetworkRequest) GetTaskID() *TaskID {
 	if m != nil {
@@ -70,6 +49,78 @@ func (m *JoinNetworkRequest) GetNetworkID() string {
 	return ""
 }
 
+type TaskListRequest struct {
+	DealID *BigInt `protobuf:"bytes,1,opt,name=dealID" json:"dealID,omitempty"`
+}
+
+func (m *TaskListRequest) Reset()                    { *m = TaskListRequest{} }
+func (m *TaskListRequest) String() string            { return proto.CompactTextString(m) }
+func (*TaskListRequest) ProtoMessage()               {}
+func (*TaskListRequest) Descriptor() ([]byte, []int) { return fileDescriptor9, []int{1} }
+
+func (m *TaskListRequest) GetDealID() *BigInt {
+	if m != nil {
+		return m.DealID
+	}
+	return nil
+}
+
+type QuickBuyRequest struct {
+	AskID    *BigInt   `protobuf:"bytes,1,opt,name=askID" json:"askID,omitempty"`
+	Duration *Duration `protobuf:"bytes,2,opt,name=duration" json:"duration,omitempty"`
+	Force    bool      `protobuf:"varint,3,opt,name=force" json:"force,omitempty"`
+}
+
+func (m *QuickBuyRequest) Reset()                    { *m = QuickBuyRequest{} }
+func (m *QuickBuyRequest) String() string            { return proto.CompactTextString(m) }
+func (*QuickBuyRequest) ProtoMessage()               {}
+func (*QuickBuyRequest) Descriptor() ([]byte, []int) { return fileDescriptor9, []int{2} }
+
+func (m *QuickBuyRequest) GetAskID() *BigInt {
+	if m != nil {
+		return m.AskID
+	}
+	return nil
+}
+
+func (m *QuickBuyRequest) GetDuration() *Duration {
+	if m != nil {
+		return m.Duration
+	}
+	return nil
+}
+
+func (m *QuickBuyRequest) GetForce() bool {
+	if m != nil {
+		return m.Force
+	}
+	return false
+}
+
+type DealFinishRequest struct {
+	Id            *BigInt       `protobuf:"bytes,1,opt,name=id" json:"id,omitempty"`
+	BlacklistType BlacklistType `protobuf:"varint,2,opt,name=blacklistType,enum=sonm.BlacklistType" json:"blacklistType,omitempty"`
+}
+
+func (m *DealFinishRequest) Reset()                    { *m = DealFinishRequest{} }
+func (m *DealFinishRequest) String() string            { return proto.CompactTextString(m) }
+func (*DealFinishRequest) ProtoMessage()               {}
+func (*DealFinishRequest) Descriptor() ([]byte, []int) { return fileDescriptor9, []int{3} }
+
+func (m *DealFinishRequest) GetId() *BigInt {
+	if m != nil {
+		return m.Id
+	}
+	return nil
+}
+
+func (m *DealFinishRequest) GetBlacklistType() BlacklistType {
+	if m != nil {
+		return m.BlacklistType
+	}
+	return BlacklistType_BLACKLIST_NOBODY
+}
+
 type DealsReply struct {
 	Deal []*Deal `protobuf:"bytes,1,rep,name=deal" json:"deal,omitempty"`
 }
@@ -77,7 +128,7 @@ type DealsReply struct {
 func (m *DealsReply) Reset()                    { *m = DealsReply{} }
 func (m *DealsReply) String() string            { return proto.CompactTextString(m) }
 func (*DealsReply) ProtoMessage()               {}
-func (*DealsReply) Descriptor() ([]byte, []int) { return fileDescriptor13, []int{1} }
+func (*DealsReply) Descriptor() ([]byte, []int) { return fileDescriptor9, []int{4} }
 
 func (m *DealsReply) GetDeal() []*Deal {
 	if m != nil {
@@ -86,52 +137,145 @@ func (m *DealsReply) GetDeal() []*Deal {
 	return nil
 }
 
-type Worker struct {
-	ID     string                   `protobuf:"bytes,1,opt,name=ID" json:"ID,omitempty"`
-	Status WorkerRelationshipStatus `protobuf:"varint,2,opt,name=status,enum=sonm.WorkerRelationshipStatus" json:"status,omitempty"`
+type OpenDealRequest struct {
+	BidID *BigInt `protobuf:"bytes,1,opt,name=bidID" json:"bidID,omitempty"`
+	AskID *BigInt `protobuf:"bytes,2,opt,name=askID" json:"askID,omitempty"`
+	Force bool    `protobuf:"varint,3,opt,name=force" json:"force,omitempty"`
 }
 
-func (m *Worker) Reset()                    { *m = Worker{} }
-func (m *Worker) String() string            { return proto.CompactTextString(m) }
-func (*Worker) ProtoMessage()               {}
-func (*Worker) Descriptor() ([]byte, []int) { return fileDescriptor13, []int{2} }
+func (m *OpenDealRequest) Reset()                    { *m = OpenDealRequest{} }
+func (m *OpenDealRequest) String() string            { return proto.CompactTextString(m) }
+func (*OpenDealRequest) ProtoMessage()               {}
+func (*OpenDealRequest) Descriptor() ([]byte, []int) { return fileDescriptor9, []int{5} }
 
-func (m *Worker) GetID() string {
+func (m *OpenDealRequest) GetBidID() *BigInt {
 	if m != nil {
-		return m.ID
+		return m.BidID
 	}
-	return ""
+	return nil
 }
 
-func (m *Worker) GetStatus() WorkerRelationshipStatus {
+func (m *OpenDealRequest) GetAskID() *BigInt {
 	if m != nil {
-		return m.Status
+		return m.AskID
 	}
-	return WorkerRelationshipStatus_RELATION_UNAPPROVED
+	return nil
+}
+
+func (m *OpenDealRequest) GetForce() bool {
+	if m != nil {
+		return m.Force
+	}
+	return false
+}
+
+type WorkerRemoveRequest struct {
+	Master *EthAddress `protobuf:"bytes,1,opt,name=master" json:"master,omitempty"`
+	Worker *EthAddress `protobuf:"bytes,2,opt,name=worker" json:"worker,omitempty"`
+}
+
+func (m *WorkerRemoveRequest) Reset()                    { *m = WorkerRemoveRequest{} }
+func (m *WorkerRemoveRequest) String() string            { return proto.CompactTextString(m) }
+func (*WorkerRemoveRequest) ProtoMessage()               {}
+func (*WorkerRemoveRequest) Descriptor() ([]byte, []int) { return fileDescriptor9, []int{6} }
+
+func (m *WorkerRemoveRequest) GetMaster() *EthAddress {
+	if m != nil {
+		return m.Master
+	}
+	return nil
+}
+
+func (m *WorkerRemoveRequest) GetWorker() *EthAddress {
+	if m != nil {
+		return m.Worker
+	}
+	return nil
 }
 
 type WorkerListReply struct {
-	Workers []*Worker `protobuf:"bytes,1,rep,name=workers" json:"workers,omitempty"`
+	Workers []*DWHWorker `protobuf:"bytes,1,rep,name=workers" json:"workers,omitempty"`
 }
 
 func (m *WorkerListReply) Reset()                    { *m = WorkerListReply{} }
 func (m *WorkerListReply) String() string            { return proto.CompactTextString(m) }
 func (*WorkerListReply) ProtoMessage()               {}
-func (*WorkerListReply) Descriptor() ([]byte, []int) { return fileDescriptor13, []int{3} }
+func (*WorkerListReply) Descriptor() ([]byte, []int) { return fileDescriptor9, []int{7} }
 
-func (m *WorkerListReply) GetWorkers() []*Worker {
+func (m *WorkerListReply) GetWorkers() []*DWHWorker {
 	if m != nil {
 		return m.Workers
 	}
 	return nil
 }
 
+type BalanceReply struct {
+	LiveBalance    *BigInt `protobuf:"bytes,1,opt,name=liveBalance" json:"liveBalance,omitempty"`
+	SideBalance    *BigInt `protobuf:"bytes,2,opt,name=sideBalance" json:"sideBalance,omitempty"`
+	LiveEthBalance *BigInt `protobuf:"bytes,3,opt,name=liveEthBalance" json:"liveEthBalance,omitempty"`
+}
+
+func (m *BalanceReply) Reset()                    { *m = BalanceReply{} }
+func (m *BalanceReply) String() string            { return proto.CompactTextString(m) }
+func (*BalanceReply) ProtoMessage()               {}
+func (*BalanceReply) Descriptor() ([]byte, []int) { return fileDescriptor9, []int{8} }
+
+func (m *BalanceReply) GetLiveBalance() *BigInt {
+	if m != nil {
+		return m.LiveBalance
+	}
+	return nil
+}
+
+func (m *BalanceReply) GetSideBalance() *BigInt {
+	if m != nil {
+		return m.SideBalance
+	}
+	return nil
+}
+
+func (m *BalanceReply) GetLiveEthBalance() *BigInt {
+	if m != nil {
+		return m.LiveEthBalance
+	}
+	return nil
+}
+
+type TokenTransferRequest struct {
+	To     *EthAddress `protobuf:"bytes,1,opt,name=to" json:"to,omitempty"`
+	Amount *BigInt     `protobuf:"bytes,2,opt,name=amount" json:"amount,omitempty"`
+}
+
+func (m *TokenTransferRequest) Reset()                    { *m = TokenTransferRequest{} }
+func (m *TokenTransferRequest) String() string            { return proto.CompactTextString(m) }
+func (*TokenTransferRequest) ProtoMessage()               {}
+func (*TokenTransferRequest) Descriptor() ([]byte, []int) { return fileDescriptor9, []int{9} }
+
+func (m *TokenTransferRequest) GetTo() *EthAddress {
+	if m != nil {
+		return m.To
+	}
+	return nil
+}
+
+func (m *TokenTransferRequest) GetAmount() *BigInt {
+	if m != nil {
+		return m.Amount
+	}
+	return nil
+}
+
 func init() {
 	proto.RegisterType((*JoinNetworkRequest)(nil), "sonm.JoinNetworkRequest")
+	proto.RegisterType((*TaskListRequest)(nil), "sonm.TaskListRequest")
+	proto.RegisterType((*QuickBuyRequest)(nil), "sonm.QuickBuyRequest")
+	proto.RegisterType((*DealFinishRequest)(nil), "sonm.DealFinishRequest")
 	proto.RegisterType((*DealsReply)(nil), "sonm.DealsReply")
-	proto.RegisterType((*Worker)(nil), "sonm.Worker")
+	proto.RegisterType((*OpenDealRequest)(nil), "sonm.OpenDealRequest")
+	proto.RegisterType((*WorkerRemoveRequest)(nil), "sonm.WorkerRemoveRequest")
 	proto.RegisterType((*WorkerListReply)(nil), "sonm.WorkerListReply")
-	proto.RegisterEnum("sonm.WorkerRelationshipStatus", WorkerRelationshipStatus_name, WorkerRelationshipStatus_value)
+	proto.RegisterType((*BalanceReply)(nil), "sonm.BalanceReply")
+	proto.RegisterType((*TokenTransferRequest)(nil), "sonm.TokenTransferRequest")
 }
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -146,7 +290,7 @@ const _ = grpc.SupportPackageIsVersion4
 
 type TaskManagementClient interface {
 	// List produces a list of all tasks running on different SONM nodes
-	List(ctx context.Context, in *EthAddress, opts ...grpc.CallOption) (*TaskListReply, error)
+	List(ctx context.Context, in *TaskListRequest, opts ...grpc.CallOption) (*TaskListReply, error)
 	// PushTask pushes image to Worker
 	PushTask(ctx context.Context, opts ...grpc.CallOption) (TaskManagement_PushTaskClient, error)
 	// Start starts a task on given resource
@@ -171,7 +315,7 @@ func NewTaskManagementClient(cc *grpc.ClientConn) TaskManagementClient {
 	return &taskManagementClient{cc}
 }
 
-func (c *taskManagementClient) List(ctx context.Context, in *EthAddress, opts ...grpc.CallOption) (*TaskListReply, error) {
+func (c *taskManagementClient) List(ctx context.Context, in *TaskListRequest, opts ...grpc.CallOption) (*TaskListReply, error) {
 	out := new(TaskListReply)
 	err := grpc.Invoke(ctx, "/sonm.TaskManagement/List", in, out, c.cc, opts...)
 	if err != nil {
@@ -315,7 +459,7 @@ func (x *taskManagementPullTaskClient) Recv() (*Chunk, error) {
 
 type TaskManagementServer interface {
 	// List produces a list of all tasks running on different SONM nodes
-	List(context.Context, *EthAddress) (*TaskListReply, error)
+	List(context.Context, *TaskListRequest) (*TaskListReply, error)
 	// PushTask pushes image to Worker
 	PushTask(TaskManagement_PushTaskServer) error
 	// Start starts a task on given resource
@@ -337,7 +481,7 @@ func RegisterTaskManagementServer(s *grpc.Server, srv TaskManagementServer) {
 }
 
 func _TaskManagement_List_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(EthAddress)
+	in := new(TaskListRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -349,7 +493,7 @@ func _TaskManagement_List_Handler(srv interface{}, ctx context.Context, dec func
 		FullMethod: "/sonm.TaskManagement/List",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TaskManagementServer).List(ctx, req.(*EthAddress))
+		return srv.(TaskManagementServer).List(ctx, req.(*TaskListRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -546,9 +690,22 @@ type DealManagementClient interface {
 	// List produces a list of all deals made by client with given ID
 	List(ctx context.Context, in *Count, opts ...grpc.CallOption) (*DealsReply, error)
 	// Status produces a detailed info about deal with given ID.
-	Status(ctx context.Context, in *ID, opts ...grpc.CallOption) (*DealInfoReply, error)
+	Status(ctx context.Context, in *BigInt, opts ...grpc.CallOption) (*DealInfoReply, error)
 	// Finish finishes a deal with given ID
-	Finish(ctx context.Context, in *ID, opts ...grpc.CallOption) (*Empty, error)
+	Finish(ctx context.Context, in *DealFinishRequest, opts ...grpc.CallOption) (*Empty, error)
+	// Open tries to open deal between two orders
+	Open(ctx context.Context, in *OpenDealRequest, opts ...grpc.CallOption) (*Deal, error)
+	// ChangeRequestsList return change requests for given deal
+	ChangeRequestsList(ctx context.Context, in *BigInt, opts ...grpc.CallOption) (*DealChangeRequestsReply, error)
+	// CreateChangeRequest creates new change request for deal
+	CreateChangeRequest(ctx context.Context, in *DealChangeRequest, opts ...grpc.CallOption) (*BigInt, error)
+	// ApproveChangeRequest approves change request by their ID
+	ApproveChangeRequest(ctx context.Context, in *BigInt, opts ...grpc.CallOption) (*Empty, error)
+	// CancelChangeRequest removes pending change request
+	CancelChangeRequest(ctx context.Context, in *BigInt, opts ...grpc.CallOption) (*Empty, error)
+	// QuickBuy places BID order with the same parameters as given ASK order have,
+	// then opens deal with this two orders.
+	QuickBuy(ctx context.Context, in *QuickBuyRequest, opts ...grpc.CallOption) (*DealInfoReply, error)
 }
 
 type dealManagementClient struct {
@@ -568,7 +725,7 @@ func (c *dealManagementClient) List(ctx context.Context, in *Count, opts ...grpc
 	return out, nil
 }
 
-func (c *dealManagementClient) Status(ctx context.Context, in *ID, opts ...grpc.CallOption) (*DealInfoReply, error) {
+func (c *dealManagementClient) Status(ctx context.Context, in *BigInt, opts ...grpc.CallOption) (*DealInfoReply, error) {
 	out := new(DealInfoReply)
 	err := grpc.Invoke(ctx, "/sonm.DealManagement/Status", in, out, c.cc, opts...)
 	if err != nil {
@@ -577,9 +734,63 @@ func (c *dealManagementClient) Status(ctx context.Context, in *ID, opts ...grpc.
 	return out, nil
 }
 
-func (c *dealManagementClient) Finish(ctx context.Context, in *ID, opts ...grpc.CallOption) (*Empty, error) {
+func (c *dealManagementClient) Finish(ctx context.Context, in *DealFinishRequest, opts ...grpc.CallOption) (*Empty, error) {
 	out := new(Empty)
 	err := grpc.Invoke(ctx, "/sonm.DealManagement/Finish", in, out, c.cc, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dealManagementClient) Open(ctx context.Context, in *OpenDealRequest, opts ...grpc.CallOption) (*Deal, error) {
+	out := new(Deal)
+	err := grpc.Invoke(ctx, "/sonm.DealManagement/Open", in, out, c.cc, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dealManagementClient) ChangeRequestsList(ctx context.Context, in *BigInt, opts ...grpc.CallOption) (*DealChangeRequestsReply, error) {
+	out := new(DealChangeRequestsReply)
+	err := grpc.Invoke(ctx, "/sonm.DealManagement/ChangeRequestsList", in, out, c.cc, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dealManagementClient) CreateChangeRequest(ctx context.Context, in *DealChangeRequest, opts ...grpc.CallOption) (*BigInt, error) {
+	out := new(BigInt)
+	err := grpc.Invoke(ctx, "/sonm.DealManagement/CreateChangeRequest", in, out, c.cc, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dealManagementClient) ApproveChangeRequest(ctx context.Context, in *BigInt, opts ...grpc.CallOption) (*Empty, error) {
+	out := new(Empty)
+	err := grpc.Invoke(ctx, "/sonm.DealManagement/ApproveChangeRequest", in, out, c.cc, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dealManagementClient) CancelChangeRequest(ctx context.Context, in *BigInt, opts ...grpc.CallOption) (*Empty, error) {
+	out := new(Empty)
+	err := grpc.Invoke(ctx, "/sonm.DealManagement/CancelChangeRequest", in, out, c.cc, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dealManagementClient) QuickBuy(ctx context.Context, in *QuickBuyRequest, opts ...grpc.CallOption) (*DealInfoReply, error) {
+	out := new(DealInfoReply)
+	err := grpc.Invoke(ctx, "/sonm.DealManagement/QuickBuy", in, out, c.cc, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -592,9 +803,22 @@ type DealManagementServer interface {
 	// List produces a list of all deals made by client with given ID
 	List(context.Context, *Count) (*DealsReply, error)
 	// Status produces a detailed info about deal with given ID.
-	Status(context.Context, *ID) (*DealInfoReply, error)
+	Status(context.Context, *BigInt) (*DealInfoReply, error)
 	// Finish finishes a deal with given ID
-	Finish(context.Context, *ID) (*Empty, error)
+	Finish(context.Context, *DealFinishRequest) (*Empty, error)
+	// Open tries to open deal between two orders
+	Open(context.Context, *OpenDealRequest) (*Deal, error)
+	// ChangeRequestsList return change requests for given deal
+	ChangeRequestsList(context.Context, *BigInt) (*DealChangeRequestsReply, error)
+	// CreateChangeRequest creates new change request for deal
+	CreateChangeRequest(context.Context, *DealChangeRequest) (*BigInt, error)
+	// ApproveChangeRequest approves change request by their ID
+	ApproveChangeRequest(context.Context, *BigInt) (*Empty, error)
+	// CancelChangeRequest removes pending change request
+	CancelChangeRequest(context.Context, *BigInt) (*Empty, error)
+	// QuickBuy places BID order with the same parameters as given ASK order have,
+	// then opens deal with this two orders.
+	QuickBuy(context.Context, *QuickBuyRequest) (*DealInfoReply, error)
 }
 
 func RegisterDealManagementServer(s *grpc.Server, srv DealManagementServer) {
@@ -620,7 +844,7 @@ func _DealManagement_List_Handler(srv interface{}, ctx context.Context, dec func
 }
 
 func _DealManagement_Status_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ID)
+	in := new(BigInt)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -632,13 +856,13 @@ func _DealManagement_Status_Handler(srv interface{}, ctx context.Context, dec fu
 		FullMethod: "/sonm.DealManagement/Status",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(DealManagementServer).Status(ctx, req.(*ID))
+		return srv.(DealManagementServer).Status(ctx, req.(*BigInt))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _DealManagement_Finish_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ID)
+	in := new(DealFinishRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -650,7 +874,115 @@ func _DealManagement_Finish_Handler(srv interface{}, ctx context.Context, dec fu
 		FullMethod: "/sonm.DealManagement/Finish",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(DealManagementServer).Finish(ctx, req.(*ID))
+		return srv.(DealManagementServer).Finish(ctx, req.(*DealFinishRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DealManagement_Open_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(OpenDealRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DealManagementServer).Open(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/sonm.DealManagement/Open",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DealManagementServer).Open(ctx, req.(*OpenDealRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DealManagement_ChangeRequestsList_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BigInt)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DealManagementServer).ChangeRequestsList(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/sonm.DealManagement/ChangeRequestsList",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DealManagementServer).ChangeRequestsList(ctx, req.(*BigInt))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DealManagement_CreateChangeRequest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DealChangeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DealManagementServer).CreateChangeRequest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/sonm.DealManagement/CreateChangeRequest",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DealManagementServer).CreateChangeRequest(ctx, req.(*DealChangeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DealManagement_ApproveChangeRequest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BigInt)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DealManagementServer).ApproveChangeRequest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/sonm.DealManagement/ApproveChangeRequest",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DealManagementServer).ApproveChangeRequest(ctx, req.(*BigInt))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DealManagement_CancelChangeRequest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BigInt)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DealManagementServer).CancelChangeRequest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/sonm.DealManagement/CancelChangeRequest",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DealManagementServer).CancelChangeRequest(ctx, req.(*BigInt))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DealManagement_QuickBuy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(QuickBuyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DealManagementServer).QuickBuy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/sonm.DealManagement/QuickBuy",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DealManagementServer).QuickBuy(ctx, req.(*QuickBuyRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -671,6 +1003,30 @@ var _DealManagement_serviceDesc = grpc.ServiceDesc{
 			MethodName: "Finish",
 			Handler:    _DealManagement_Finish_Handler,
 		},
+		{
+			MethodName: "Open",
+			Handler:    _DealManagement_Open_Handler,
+		},
+		{
+			MethodName: "ChangeRequestsList",
+			Handler:    _DealManagement_ChangeRequestsList_Handler,
+		},
+		{
+			MethodName: "CreateChangeRequest",
+			Handler:    _DealManagement_CreateChangeRequest_Handler,
+		},
+		{
+			MethodName: "ApproveChangeRequest",
+			Handler:    _DealManagement_ApproveChangeRequest_Handler,
+		},
+		{
+			MethodName: "CancelChangeRequest",
+			Handler:    _DealManagement_CancelChangeRequest_Handler,
+		},
+		{
+			MethodName: "QuickBuy",
+			Handler:    _DealManagement_QuickBuy_Handler,
+		},
 	},
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "node.proto",
@@ -681,11 +1037,11 @@ var _DealManagement_serviceDesc = grpc.ServiceDesc{
 type MasterManagementClient interface {
 	// WorkersList returns worker's list for current master address.
 	// List includes already registred workers and pending unapproved requests.
-	WorkersList(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*WorkerListReply, error)
+	WorkersList(ctx context.Context, in *EthAddress, opts ...grpc.CallOption) (*WorkerListReply, error)
 	// WorkerConfirm (as master) confirms incoming request for given Worker address.
-	WorkerConfirm(ctx context.Context, in *ID, opts ...grpc.CallOption) (*Empty, error)
+	WorkerConfirm(ctx context.Context, in *EthAddress, opts ...grpc.CallOption) (*Empty, error)
 	// WorkerRemove (as master) unbinds given Worker address from Master address.
-	WorkerRemove(ctx context.Context, in *ID, opts ...grpc.CallOption) (*Empty, error)
+	WorkerRemove(ctx context.Context, in *WorkerRemoveRequest, opts ...grpc.CallOption) (*Empty, error)
 }
 
 type masterManagementClient struct {
@@ -696,7 +1052,7 @@ func NewMasterManagementClient(cc *grpc.ClientConn) MasterManagementClient {
 	return &masterManagementClient{cc}
 }
 
-func (c *masterManagementClient) WorkersList(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*WorkerListReply, error) {
+func (c *masterManagementClient) WorkersList(ctx context.Context, in *EthAddress, opts ...grpc.CallOption) (*WorkerListReply, error) {
 	out := new(WorkerListReply)
 	err := grpc.Invoke(ctx, "/sonm.MasterManagement/WorkersList", in, out, c.cc, opts...)
 	if err != nil {
@@ -705,7 +1061,7 @@ func (c *masterManagementClient) WorkersList(ctx context.Context, in *Empty, opt
 	return out, nil
 }
 
-func (c *masterManagementClient) WorkerConfirm(ctx context.Context, in *ID, opts ...grpc.CallOption) (*Empty, error) {
+func (c *masterManagementClient) WorkerConfirm(ctx context.Context, in *EthAddress, opts ...grpc.CallOption) (*Empty, error) {
 	out := new(Empty)
 	err := grpc.Invoke(ctx, "/sonm.MasterManagement/WorkerConfirm", in, out, c.cc, opts...)
 	if err != nil {
@@ -714,7 +1070,7 @@ func (c *masterManagementClient) WorkerConfirm(ctx context.Context, in *ID, opts
 	return out, nil
 }
 
-func (c *masterManagementClient) WorkerRemove(ctx context.Context, in *ID, opts ...grpc.CallOption) (*Empty, error) {
+func (c *masterManagementClient) WorkerRemove(ctx context.Context, in *WorkerRemoveRequest, opts ...grpc.CallOption) (*Empty, error) {
 	out := new(Empty)
 	err := grpc.Invoke(ctx, "/sonm.MasterManagement/WorkerRemove", in, out, c.cc, opts...)
 	if err != nil {
@@ -728,11 +1084,11 @@ func (c *masterManagementClient) WorkerRemove(ctx context.Context, in *ID, opts 
 type MasterManagementServer interface {
 	// WorkersList returns worker's list for current master address.
 	// List includes already registred workers and pending unapproved requests.
-	WorkersList(context.Context, *Empty) (*WorkerListReply, error)
+	WorkersList(context.Context, *EthAddress) (*WorkerListReply, error)
 	// WorkerConfirm (as master) confirms incoming request for given Worker address.
-	WorkerConfirm(context.Context, *ID) (*Empty, error)
+	WorkerConfirm(context.Context, *EthAddress) (*Empty, error)
 	// WorkerRemove (as master) unbinds given Worker address from Master address.
-	WorkerRemove(context.Context, *ID) (*Empty, error)
+	WorkerRemove(context.Context, *WorkerRemoveRequest) (*Empty, error)
 }
 
 func RegisterMasterManagementServer(s *grpc.Server, srv MasterManagementServer) {
@@ -740,7 +1096,7 @@ func RegisterMasterManagementServer(s *grpc.Server, srv MasterManagementServer) 
 }
 
 func _MasterManagement_WorkersList_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(Empty)
+	in := new(EthAddress)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -752,13 +1108,13 @@ func _MasterManagement_WorkersList_Handler(srv interface{}, ctx context.Context,
 		FullMethod: "/sonm.MasterManagement/WorkersList",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MasterManagementServer).WorkersList(ctx, req.(*Empty))
+		return srv.(MasterManagementServer).WorkersList(ctx, req.(*EthAddress))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _MasterManagement_WorkerConfirm_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ID)
+	in := new(EthAddress)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -770,13 +1126,13 @@ func _MasterManagement_WorkerConfirm_Handler(srv interface{}, ctx context.Contex
 		FullMethod: "/sonm.MasterManagement/WorkerConfirm",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MasterManagementServer).WorkerConfirm(ctx, req.(*ID))
+		return srv.(MasterManagementServer).WorkerConfirm(ctx, req.(*EthAddress))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _MasterManagement_WorkerRemove_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ID)
+	in := new(WorkerRemoveRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -788,7 +1144,7 @@ func _MasterManagement_WorkerRemove_Handler(srv interface{}, ctx context.Context
 		FullMethod: "/sonm.MasterManagement/WorkerRemove",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MasterManagementServer).WorkerRemove(ctx, req.(*ID))
+		return srv.(MasterManagementServer).WorkerRemove(ctx, req.(*WorkerRemoveRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -814,6 +1170,523 @@ var _MasterManagement_serviceDesc = grpc.ServiceDesc{
 	Metadata: "node.proto",
 }
 
+// Client API for TokenManagement service
+
+type TokenManagementClient interface {
+	// TestTokens increases balance for some amount of test tokens
+	// into live-chian ethereum network.
+	TestTokens(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error)
+	// Balance provide account balance for live- and side- chains.
+	Balance(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*BalanceReply, error)
+	// BalanceOf provide account balance of specified address.
+	BalanceOf(ctx context.Context, in *EthAddress, opts ...grpc.CallOption) (*BalanceReply, error)
+	// Deposit transfers funds from masterchain to sidechain
+	Deposit(ctx context.Context, in *BigInt, opts ...grpc.CallOption) (*Empty, error)
+	// Withdraw transfers funds from sidechain to masterchain
+	Withdraw(ctx context.Context, in *BigInt, opts ...grpc.CallOption) (*Empty, error)
+	// MarketAllowance returns current allowance for BC market
+	MarketAllowance(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*BigInt, error)
+	// Transfer transfers funds from one sidechain account to another.
+	Transfer(ctx context.Context, in *TokenTransferRequest, opts ...grpc.CallOption) (*Empty, error)
+}
+
+type tokenManagementClient struct {
+	cc *grpc.ClientConn
+}
+
+func NewTokenManagementClient(cc *grpc.ClientConn) TokenManagementClient {
+	return &tokenManagementClient{cc}
+}
+
+func (c *tokenManagementClient) TestTokens(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*Empty, error) {
+	out := new(Empty)
+	err := grpc.Invoke(ctx, "/sonm.TokenManagement/TestTokens", in, out, c.cc, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tokenManagementClient) Balance(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*BalanceReply, error) {
+	out := new(BalanceReply)
+	err := grpc.Invoke(ctx, "/sonm.TokenManagement/Balance", in, out, c.cc, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tokenManagementClient) BalanceOf(ctx context.Context, in *EthAddress, opts ...grpc.CallOption) (*BalanceReply, error) {
+	out := new(BalanceReply)
+	err := grpc.Invoke(ctx, "/sonm.TokenManagement/BalanceOf", in, out, c.cc, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tokenManagementClient) Deposit(ctx context.Context, in *BigInt, opts ...grpc.CallOption) (*Empty, error) {
+	out := new(Empty)
+	err := grpc.Invoke(ctx, "/sonm.TokenManagement/Deposit", in, out, c.cc, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tokenManagementClient) Withdraw(ctx context.Context, in *BigInt, opts ...grpc.CallOption) (*Empty, error) {
+	out := new(Empty)
+	err := grpc.Invoke(ctx, "/sonm.TokenManagement/Withdraw", in, out, c.cc, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tokenManagementClient) MarketAllowance(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*BigInt, error) {
+	out := new(BigInt)
+	err := grpc.Invoke(ctx, "/sonm.TokenManagement/MarketAllowance", in, out, c.cc, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tokenManagementClient) Transfer(ctx context.Context, in *TokenTransferRequest, opts ...grpc.CallOption) (*Empty, error) {
+	out := new(Empty)
+	err := grpc.Invoke(ctx, "/sonm.TokenManagement/Transfer", in, out, c.cc, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Server API for TokenManagement service
+
+type TokenManagementServer interface {
+	// TestTokens increases balance for some amount of test tokens
+	// into live-chian ethereum network.
+	TestTokens(context.Context, *Empty) (*Empty, error)
+	// Balance provide account balance for live- and side- chains.
+	Balance(context.Context, *Empty) (*BalanceReply, error)
+	// BalanceOf provide account balance of specified address.
+	BalanceOf(context.Context, *EthAddress) (*BalanceReply, error)
+	// Deposit transfers funds from masterchain to sidechain
+	Deposit(context.Context, *BigInt) (*Empty, error)
+	// Withdraw transfers funds from sidechain to masterchain
+	Withdraw(context.Context, *BigInt) (*Empty, error)
+	// MarketAllowance returns current allowance for BC market
+	MarketAllowance(context.Context, *Empty) (*BigInt, error)
+	// Transfer transfers funds from one sidechain account to another.
+	Transfer(context.Context, *TokenTransferRequest) (*Empty, error)
+}
+
+func RegisterTokenManagementServer(s *grpc.Server, srv TokenManagementServer) {
+	s.RegisterService(&_TokenManagement_serviceDesc, srv)
+}
+
+func _TokenManagement_TestTokens_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TokenManagementServer).TestTokens(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/sonm.TokenManagement/TestTokens",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TokenManagementServer).TestTokens(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TokenManagement_Balance_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TokenManagementServer).Balance(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/sonm.TokenManagement/Balance",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TokenManagementServer).Balance(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TokenManagement_BalanceOf_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EthAddress)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TokenManagementServer).BalanceOf(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/sonm.TokenManagement/BalanceOf",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TokenManagementServer).BalanceOf(ctx, req.(*EthAddress))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TokenManagement_Deposit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BigInt)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TokenManagementServer).Deposit(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/sonm.TokenManagement/Deposit",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TokenManagementServer).Deposit(ctx, req.(*BigInt))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TokenManagement_Withdraw_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BigInt)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TokenManagementServer).Withdraw(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/sonm.TokenManagement/Withdraw",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TokenManagementServer).Withdraw(ctx, req.(*BigInt))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TokenManagement_MarketAllowance_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TokenManagementServer).MarketAllowance(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/sonm.TokenManagement/MarketAllowance",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TokenManagementServer).MarketAllowance(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TokenManagement_Transfer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TokenTransferRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TokenManagementServer).Transfer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/sonm.TokenManagement/Transfer",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TokenManagementServer).Transfer(ctx, req.(*TokenTransferRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+var _TokenManagement_serviceDesc = grpc.ServiceDesc{
+	ServiceName: "sonm.TokenManagement",
+	HandlerType: (*TokenManagementServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "TestTokens",
+			Handler:    _TokenManagement_TestTokens_Handler,
+		},
+		{
+			MethodName: "Balance",
+			Handler:    _TokenManagement_Balance_Handler,
+		},
+		{
+			MethodName: "BalanceOf",
+			Handler:    _TokenManagement_BalanceOf_Handler,
+		},
+		{
+			MethodName: "Deposit",
+			Handler:    _TokenManagement_Deposit_Handler,
+		},
+		{
+			MethodName: "Withdraw",
+			Handler:    _TokenManagement_Withdraw_Handler,
+		},
+		{
+			MethodName: "MarketAllowance",
+			Handler:    _TokenManagement_MarketAllowance_Handler,
+		},
+		{
+			MethodName: "Transfer",
+			Handler:    _TokenManagement_Transfer_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "node.proto",
+}
+
+// Client API for Blacklist service
+
+type BlacklistClient interface {
+	// List addresses into given blacklist
+	List(ctx context.Context, in *EthAddress, opts ...grpc.CallOption) (*BlacklistReply, error)
+	// Remove removes given address from blacklist
+	Remove(ctx context.Context, in *EthAddress, opts ...grpc.CallOption) (*Empty, error)
+}
+
+type blacklistClient struct {
+	cc *grpc.ClientConn
+}
+
+func NewBlacklistClient(cc *grpc.ClientConn) BlacklistClient {
+	return &blacklistClient{cc}
+}
+
+func (c *blacklistClient) List(ctx context.Context, in *EthAddress, opts ...grpc.CallOption) (*BlacklistReply, error) {
+	out := new(BlacklistReply)
+	err := grpc.Invoke(ctx, "/sonm.Blacklist/List", in, out, c.cc, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blacklistClient) Remove(ctx context.Context, in *EthAddress, opts ...grpc.CallOption) (*Empty, error) {
+	out := new(Empty)
+	err := grpc.Invoke(ctx, "/sonm.Blacklist/Remove", in, out, c.cc, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Server API for Blacklist service
+
+type BlacklistServer interface {
+	// List addresses into given blacklist
+	List(context.Context, *EthAddress) (*BlacklistReply, error)
+	// Remove removes given address from blacklist
+	Remove(context.Context, *EthAddress) (*Empty, error)
+}
+
+func RegisterBlacklistServer(s *grpc.Server, srv BlacklistServer) {
+	s.RegisterService(&_Blacklist_serviceDesc, srv)
+}
+
+func _Blacklist_List_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EthAddress)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlacklistServer).List(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/sonm.Blacklist/List",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlacklistServer).List(ctx, req.(*EthAddress))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Blacklist_Remove_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EthAddress)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlacklistServer).Remove(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/sonm.Blacklist/Remove",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlacklistServer).Remove(ctx, req.(*EthAddress))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+var _Blacklist_serviceDesc = grpc.ServiceDesc{
+	ServiceName: "sonm.Blacklist",
+	HandlerType: (*BlacklistServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "List",
+			Handler:    _Blacklist_List_Handler,
+		},
+		{
+			MethodName: "Remove",
+			Handler:    _Blacklist_Remove_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "node.proto",
+}
+
+// Client API for Profiles service
+
+type ProfilesClient interface {
+	// List allows searching for profiles
+	List(ctx context.Context, in *ProfilesRequest, opts ...grpc.CallOption) (*ProfilesReply, error)
+	// Status shows detailed info about given profile
+	Status(ctx context.Context, in *EthID, opts ...grpc.CallOption) (*Profile, error)
+	// RemoveAttribute allows to remove profile attributes
+	// for the user's own profile
+	RemoveAttribute(ctx context.Context, in *BigInt, opts ...grpc.CallOption) (*Empty, error)
+}
+
+type profilesClient struct {
+	cc *grpc.ClientConn
+}
+
+func NewProfilesClient(cc *grpc.ClientConn) ProfilesClient {
+	return &profilesClient{cc}
+}
+
+func (c *profilesClient) List(ctx context.Context, in *ProfilesRequest, opts ...grpc.CallOption) (*ProfilesReply, error) {
+	out := new(ProfilesReply)
+	err := grpc.Invoke(ctx, "/sonm.Profiles/List", in, out, c.cc, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *profilesClient) Status(ctx context.Context, in *EthID, opts ...grpc.CallOption) (*Profile, error) {
+	out := new(Profile)
+	err := grpc.Invoke(ctx, "/sonm.Profiles/Status", in, out, c.cc, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *profilesClient) RemoveAttribute(ctx context.Context, in *BigInt, opts ...grpc.CallOption) (*Empty, error) {
+	out := new(Empty)
+	err := grpc.Invoke(ctx, "/sonm.Profiles/RemoveAttribute", in, out, c.cc, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Server API for Profiles service
+
+type ProfilesServer interface {
+	// List allows searching for profiles
+	List(context.Context, *ProfilesRequest) (*ProfilesReply, error)
+	// Status shows detailed info about given profile
+	Status(context.Context, *EthID) (*Profile, error)
+	// RemoveAttribute allows to remove profile attributes
+	// for the user's own profile
+	RemoveAttribute(context.Context, *BigInt) (*Empty, error)
+}
+
+func RegisterProfilesServer(s *grpc.Server, srv ProfilesServer) {
+	s.RegisterService(&_Profiles_serviceDesc, srv)
+}
+
+func _Profiles_List_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProfilesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProfilesServer).List(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/sonm.Profiles/List",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProfilesServer).List(ctx, req.(*ProfilesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Profiles_Status_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EthID)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProfilesServer).Status(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/sonm.Profiles/Status",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProfilesServer).Status(ctx, req.(*EthID))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Profiles_RemoveAttribute_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BigInt)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProfilesServer).RemoveAttribute(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/sonm.Profiles/RemoveAttribute",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProfilesServer).RemoveAttribute(ctx, req.(*BigInt))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+var _Profiles_serviceDesc = grpc.ServiceDesc{
+	ServiceName: "sonm.Profiles",
+	HandlerType: (*ProfilesServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "List",
+			Handler:    _Profiles_List_Handler,
+		},
+		{
+			MethodName: "Status",
+			Handler:    _Profiles_Status_Handler,
+		},
+		{
+			MethodName: "RemoveAttribute",
+			Handler:    _Profiles_RemoveAttribute_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "node.proto",
+}
+
 // Begin grpccmd
 var _ = grpccmd.RunE
 
@@ -825,10 +1698,10 @@ var _TaskManagementCmd = &cobra.Command{
 
 var _TaskManagement_ListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "Make the List method call, input-type: sonm.EthAddress output-type: sonm.TaskListReply",
+	Short: "Make the List method call, input-type: sonm.TaskListRequest output-type: sonm.TaskListReply",
 	RunE: grpccmd.RunE(
 		"List",
-		"sonm.EthAddress",
+		"sonm.TaskListRequest",
 		func(c io.Closer) interface{} {
 			cc := c.(*grpc.ClientConn)
 			return NewTaskManagementClient(cc)
@@ -838,8 +1711,8 @@ var _TaskManagement_ListCmd = &cobra.Command{
 
 var _TaskManagement_ListCmd_gen = &cobra.Command{
 	Use:   "list-gen",
-	Short: "Generate JSON for method call of List (input-type: sonm.EthAddress)",
-	RunE:  grpccmd.TypeToJson("sonm.EthAddress"),
+	Short: "Generate JSON for method call of List (input-type: sonm.TaskListRequest)",
+	RunE:  grpccmd.TypeToJson("sonm.TaskListRequest"),
 }
 
 var _TaskManagement_PushTaskCmd = &cobra.Command{
@@ -1025,10 +1898,10 @@ var _DealManagement_ListCmd_gen = &cobra.Command{
 
 var _DealManagement_StatusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Make the Status method call, input-type: sonm.ID output-type: sonm.DealInfoReply",
+	Short: "Make the Status method call, input-type: sonm.BigInt output-type: sonm.DealInfoReply",
 	RunE: grpccmd.RunE(
 		"Status",
-		"sonm.ID",
+		"sonm.BigInt",
 		func(c io.Closer) interface{} {
 			cc := c.(*grpc.ClientConn)
 			return NewDealManagementClient(cc)
@@ -1038,16 +1911,16 @@ var _DealManagement_StatusCmd = &cobra.Command{
 
 var _DealManagement_StatusCmd_gen = &cobra.Command{
 	Use:   "status-gen",
-	Short: "Generate JSON for method call of Status (input-type: sonm.ID)",
-	RunE:  grpccmd.TypeToJson("sonm.ID"),
+	Short: "Generate JSON for method call of Status (input-type: sonm.BigInt)",
+	RunE:  grpccmd.TypeToJson("sonm.BigInt"),
 }
 
 var _DealManagement_FinishCmd = &cobra.Command{
 	Use:   "finish",
-	Short: "Make the Finish method call, input-type: sonm.ID output-type: sonm.Empty",
+	Short: "Make the Finish method call, input-type: sonm.DealFinishRequest output-type: sonm.Empty",
 	RunE: grpccmd.RunE(
 		"Finish",
-		"sonm.ID",
+		"sonm.DealFinishRequest",
 		func(c io.Closer) interface{} {
 			cc := c.(*grpc.ClientConn)
 			return NewDealManagementClient(cc)
@@ -1057,8 +1930,122 @@ var _DealManagement_FinishCmd = &cobra.Command{
 
 var _DealManagement_FinishCmd_gen = &cobra.Command{
 	Use:   "finish-gen",
-	Short: "Generate JSON for method call of Finish (input-type: sonm.ID)",
-	RunE:  grpccmd.TypeToJson("sonm.ID"),
+	Short: "Generate JSON for method call of Finish (input-type: sonm.DealFinishRequest)",
+	RunE:  grpccmd.TypeToJson("sonm.DealFinishRequest"),
+}
+
+var _DealManagement_OpenCmd = &cobra.Command{
+	Use:   "open",
+	Short: "Make the Open method call, input-type: sonm.OpenDealRequest output-type: sonm.Deal",
+	RunE: grpccmd.RunE(
+		"Open",
+		"sonm.OpenDealRequest",
+		func(c io.Closer) interface{} {
+			cc := c.(*grpc.ClientConn)
+			return NewDealManagementClient(cc)
+		},
+	),
+}
+
+var _DealManagement_OpenCmd_gen = &cobra.Command{
+	Use:   "open-gen",
+	Short: "Generate JSON for method call of Open (input-type: sonm.OpenDealRequest)",
+	RunE:  grpccmd.TypeToJson("sonm.OpenDealRequest"),
+}
+
+var _DealManagement_ChangeRequestsListCmd = &cobra.Command{
+	Use:   "changeRequestsList",
+	Short: "Make the ChangeRequestsList method call, input-type: sonm.BigInt output-type: sonm.DealChangeRequestsReply",
+	RunE: grpccmd.RunE(
+		"ChangeRequestsList",
+		"sonm.BigInt",
+		func(c io.Closer) interface{} {
+			cc := c.(*grpc.ClientConn)
+			return NewDealManagementClient(cc)
+		},
+	),
+}
+
+var _DealManagement_ChangeRequestsListCmd_gen = &cobra.Command{
+	Use:   "changeRequestsList-gen",
+	Short: "Generate JSON for method call of ChangeRequestsList (input-type: sonm.BigInt)",
+	RunE:  grpccmd.TypeToJson("sonm.BigInt"),
+}
+
+var _DealManagement_CreateChangeRequestCmd = &cobra.Command{
+	Use:   "createChangeRequest",
+	Short: "Make the CreateChangeRequest method call, input-type: sonm.DealChangeRequest output-type: sonm.BigInt",
+	RunE: grpccmd.RunE(
+		"CreateChangeRequest",
+		"sonm.DealChangeRequest",
+		func(c io.Closer) interface{} {
+			cc := c.(*grpc.ClientConn)
+			return NewDealManagementClient(cc)
+		},
+	),
+}
+
+var _DealManagement_CreateChangeRequestCmd_gen = &cobra.Command{
+	Use:   "createChangeRequest-gen",
+	Short: "Generate JSON for method call of CreateChangeRequest (input-type: sonm.DealChangeRequest)",
+	RunE:  grpccmd.TypeToJson("sonm.DealChangeRequest"),
+}
+
+var _DealManagement_ApproveChangeRequestCmd = &cobra.Command{
+	Use:   "approveChangeRequest",
+	Short: "Make the ApproveChangeRequest method call, input-type: sonm.BigInt output-type: sonm.Empty",
+	RunE: grpccmd.RunE(
+		"ApproveChangeRequest",
+		"sonm.BigInt",
+		func(c io.Closer) interface{} {
+			cc := c.(*grpc.ClientConn)
+			return NewDealManagementClient(cc)
+		},
+	),
+}
+
+var _DealManagement_ApproveChangeRequestCmd_gen = &cobra.Command{
+	Use:   "approveChangeRequest-gen",
+	Short: "Generate JSON for method call of ApproveChangeRequest (input-type: sonm.BigInt)",
+	RunE:  grpccmd.TypeToJson("sonm.BigInt"),
+}
+
+var _DealManagement_CancelChangeRequestCmd = &cobra.Command{
+	Use:   "cancelChangeRequest",
+	Short: "Make the CancelChangeRequest method call, input-type: sonm.BigInt output-type: sonm.Empty",
+	RunE: grpccmd.RunE(
+		"CancelChangeRequest",
+		"sonm.BigInt",
+		func(c io.Closer) interface{} {
+			cc := c.(*grpc.ClientConn)
+			return NewDealManagementClient(cc)
+		},
+	),
+}
+
+var _DealManagement_CancelChangeRequestCmd_gen = &cobra.Command{
+	Use:   "cancelChangeRequest-gen",
+	Short: "Generate JSON for method call of CancelChangeRequest (input-type: sonm.BigInt)",
+	RunE:  grpccmd.TypeToJson("sonm.BigInt"),
+}
+
+var _DealManagement_QuickBuyCmd = &cobra.Command{
+	Use:   "quickBuy",
+	Short: "Make the QuickBuy method call, input-type: sonm.QuickBuyRequest output-type: sonm.DealInfoReply",
+	RunE: grpccmd.RunE(
+		"QuickBuy",
+		"sonm.QuickBuyRequest",
+		func(c io.Closer) interface{} {
+			cc := c.(*grpc.ClientConn)
+			return NewDealManagementClient(cc)
+		},
+	),
+}
+
+var _DealManagement_QuickBuyCmd_gen = &cobra.Command{
+	Use:   "quickBuy-gen",
+	Short: "Generate JSON for method call of QuickBuy (input-type: sonm.QuickBuyRequest)",
+	RunE:  grpccmd.TypeToJson("sonm.QuickBuyRequest"),
 }
 
 // Register commands with the root command and service command
@@ -1071,6 +2058,18 @@ func init() {
 		_DealManagement_StatusCmd_gen,
 		_DealManagement_FinishCmd,
 		_DealManagement_FinishCmd_gen,
+		_DealManagement_OpenCmd,
+		_DealManagement_OpenCmd_gen,
+		_DealManagement_ChangeRequestsListCmd,
+		_DealManagement_ChangeRequestsListCmd_gen,
+		_DealManagement_CreateChangeRequestCmd,
+		_DealManagement_CreateChangeRequestCmd_gen,
+		_DealManagement_ApproveChangeRequestCmd,
+		_DealManagement_ApproveChangeRequestCmd_gen,
+		_DealManagement_CancelChangeRequestCmd,
+		_DealManagement_CancelChangeRequestCmd_gen,
+		_DealManagement_QuickBuyCmd,
+		_DealManagement_QuickBuyCmd_gen,
 	)
 }
 
@@ -1082,10 +2081,10 @@ var _MasterManagementCmd = &cobra.Command{
 
 var _MasterManagement_WorkersListCmd = &cobra.Command{
 	Use:   "workersList",
-	Short: "Make the WorkersList method call, input-type: sonm.Empty output-type: sonm.WorkerListReply",
+	Short: "Make the WorkersList method call, input-type: sonm.EthAddress output-type: sonm.WorkerListReply",
 	RunE: grpccmd.RunE(
 		"WorkersList",
-		"sonm.Empty",
+		"sonm.EthAddress",
 		func(c io.Closer) interface{} {
 			cc := c.(*grpc.ClientConn)
 			return NewMasterManagementClient(cc)
@@ -1095,16 +2094,16 @@ var _MasterManagement_WorkersListCmd = &cobra.Command{
 
 var _MasterManagement_WorkersListCmd_gen = &cobra.Command{
 	Use:   "workersList-gen",
-	Short: "Generate JSON for method call of WorkersList (input-type: sonm.Empty)",
-	RunE:  grpccmd.TypeToJson("sonm.Empty"),
+	Short: "Generate JSON for method call of WorkersList (input-type: sonm.EthAddress)",
+	RunE:  grpccmd.TypeToJson("sonm.EthAddress"),
 }
 
 var _MasterManagement_WorkerConfirmCmd = &cobra.Command{
 	Use:   "workerConfirm",
-	Short: "Make the WorkerConfirm method call, input-type: sonm.ID output-type: sonm.Empty",
+	Short: "Make the WorkerConfirm method call, input-type: sonm.EthAddress output-type: sonm.Empty",
 	RunE: grpccmd.RunE(
 		"WorkerConfirm",
-		"sonm.ID",
+		"sonm.EthAddress",
 		func(c io.Closer) interface{} {
 			cc := c.(*grpc.ClientConn)
 			return NewMasterManagementClient(cc)
@@ -1114,16 +2113,16 @@ var _MasterManagement_WorkerConfirmCmd = &cobra.Command{
 
 var _MasterManagement_WorkerConfirmCmd_gen = &cobra.Command{
 	Use:   "workerConfirm-gen",
-	Short: "Generate JSON for method call of WorkerConfirm (input-type: sonm.ID)",
-	RunE:  grpccmd.TypeToJson("sonm.ID"),
+	Short: "Generate JSON for method call of WorkerConfirm (input-type: sonm.EthAddress)",
+	RunE:  grpccmd.TypeToJson("sonm.EthAddress"),
 }
 
 var _MasterManagement_WorkerRemoveCmd = &cobra.Command{
 	Use:   "workerRemove",
-	Short: "Make the WorkerRemove method call, input-type: sonm.ID output-type: sonm.Empty",
+	Short: "Make the WorkerRemove method call, input-type: sonm.WorkerRemoveRequest output-type: sonm.Empty",
 	RunE: grpccmd.RunE(
 		"WorkerRemove",
-		"sonm.ID",
+		"sonm.WorkerRemoveRequest",
 		func(c io.Closer) interface{} {
 			cc := c.(*grpc.ClientConn)
 			return NewMasterManagementClient(cc)
@@ -1133,8 +2132,8 @@ var _MasterManagement_WorkerRemoveCmd = &cobra.Command{
 
 var _MasterManagement_WorkerRemoveCmd_gen = &cobra.Command{
 	Use:   "workerRemove-gen",
-	Short: "Generate JSON for method call of WorkerRemove (input-type: sonm.ID)",
-	RunE:  grpccmd.TypeToJson("sonm.ID"),
+	Short: "Generate JSON for method call of WorkerRemove (input-type: sonm.WorkerRemoveRequest)",
+	RunE:  grpccmd.TypeToJson("sonm.WorkerRemoveRequest"),
 }
 
 // Register commands with the root command and service command
@@ -1150,47 +2149,367 @@ func init() {
 	)
 }
 
+// TokenManagement
+var _TokenManagementCmd = &cobra.Command{
+	Use:   "tokenManagement [method]",
+	Short: "Subcommand for the TokenManagement service.",
+}
+
+var _TokenManagement_TestTokensCmd = &cobra.Command{
+	Use:   "testTokens",
+	Short: "Make the TestTokens method call, input-type: sonm.Empty output-type: sonm.Empty",
+	RunE: grpccmd.RunE(
+		"TestTokens",
+		"sonm.Empty",
+		func(c io.Closer) interface{} {
+			cc := c.(*grpc.ClientConn)
+			return NewTokenManagementClient(cc)
+		},
+	),
+}
+
+var _TokenManagement_TestTokensCmd_gen = &cobra.Command{
+	Use:   "testTokens-gen",
+	Short: "Generate JSON for method call of TestTokens (input-type: sonm.Empty)",
+	RunE:  grpccmd.TypeToJson("sonm.Empty"),
+}
+
+var _TokenManagement_BalanceCmd = &cobra.Command{
+	Use:   "balance",
+	Short: "Make the Balance method call, input-type: sonm.Empty output-type: sonm.BalanceReply",
+	RunE: grpccmd.RunE(
+		"Balance",
+		"sonm.Empty",
+		func(c io.Closer) interface{} {
+			cc := c.(*grpc.ClientConn)
+			return NewTokenManagementClient(cc)
+		},
+	),
+}
+
+var _TokenManagement_BalanceCmd_gen = &cobra.Command{
+	Use:   "balance-gen",
+	Short: "Generate JSON for method call of Balance (input-type: sonm.Empty)",
+	RunE:  grpccmd.TypeToJson("sonm.Empty"),
+}
+
+var _TokenManagement_BalanceOfCmd = &cobra.Command{
+	Use:   "balanceOf",
+	Short: "Make the BalanceOf method call, input-type: sonm.EthAddress output-type: sonm.BalanceReply",
+	RunE: grpccmd.RunE(
+		"BalanceOf",
+		"sonm.EthAddress",
+		func(c io.Closer) interface{} {
+			cc := c.(*grpc.ClientConn)
+			return NewTokenManagementClient(cc)
+		},
+	),
+}
+
+var _TokenManagement_BalanceOfCmd_gen = &cobra.Command{
+	Use:   "balanceOf-gen",
+	Short: "Generate JSON for method call of BalanceOf (input-type: sonm.EthAddress)",
+	RunE:  grpccmd.TypeToJson("sonm.EthAddress"),
+}
+
+var _TokenManagement_DepositCmd = &cobra.Command{
+	Use:   "deposit",
+	Short: "Make the Deposit method call, input-type: sonm.BigInt output-type: sonm.Empty",
+	RunE: grpccmd.RunE(
+		"Deposit",
+		"sonm.BigInt",
+		func(c io.Closer) interface{} {
+			cc := c.(*grpc.ClientConn)
+			return NewTokenManagementClient(cc)
+		},
+	),
+}
+
+var _TokenManagement_DepositCmd_gen = &cobra.Command{
+	Use:   "deposit-gen",
+	Short: "Generate JSON for method call of Deposit (input-type: sonm.BigInt)",
+	RunE:  grpccmd.TypeToJson("sonm.BigInt"),
+}
+
+var _TokenManagement_WithdrawCmd = &cobra.Command{
+	Use:   "withdraw",
+	Short: "Make the Withdraw method call, input-type: sonm.BigInt output-type: sonm.Empty",
+	RunE: grpccmd.RunE(
+		"Withdraw",
+		"sonm.BigInt",
+		func(c io.Closer) interface{} {
+			cc := c.(*grpc.ClientConn)
+			return NewTokenManagementClient(cc)
+		},
+	),
+}
+
+var _TokenManagement_WithdrawCmd_gen = &cobra.Command{
+	Use:   "withdraw-gen",
+	Short: "Generate JSON for method call of Withdraw (input-type: sonm.BigInt)",
+	RunE:  grpccmd.TypeToJson("sonm.BigInt"),
+}
+
+var _TokenManagement_MarketAllowanceCmd = &cobra.Command{
+	Use:   "marketAllowance",
+	Short: "Make the MarketAllowance method call, input-type: sonm.Empty output-type: sonm.BigInt",
+	RunE: grpccmd.RunE(
+		"MarketAllowance",
+		"sonm.Empty",
+		func(c io.Closer) interface{} {
+			cc := c.(*grpc.ClientConn)
+			return NewTokenManagementClient(cc)
+		},
+	),
+}
+
+var _TokenManagement_MarketAllowanceCmd_gen = &cobra.Command{
+	Use:   "marketAllowance-gen",
+	Short: "Generate JSON for method call of MarketAllowance (input-type: sonm.Empty)",
+	RunE:  grpccmd.TypeToJson("sonm.Empty"),
+}
+
+var _TokenManagement_TransferCmd = &cobra.Command{
+	Use:   "transfer",
+	Short: "Make the Transfer method call, input-type: sonm.TokenTransferRequest output-type: sonm.Empty",
+	RunE: grpccmd.RunE(
+		"Transfer",
+		"sonm.TokenTransferRequest",
+		func(c io.Closer) interface{} {
+			cc := c.(*grpc.ClientConn)
+			return NewTokenManagementClient(cc)
+		},
+	),
+}
+
+var _TokenManagement_TransferCmd_gen = &cobra.Command{
+	Use:   "transfer-gen",
+	Short: "Generate JSON for method call of Transfer (input-type: sonm.TokenTransferRequest)",
+	RunE:  grpccmd.TypeToJson("sonm.TokenTransferRequest"),
+}
+
+// Register commands with the root command and service command
+func init() {
+	grpccmd.RegisterServiceCmd(_TokenManagementCmd)
+	_TokenManagementCmd.AddCommand(
+		_TokenManagement_TestTokensCmd,
+		_TokenManagement_TestTokensCmd_gen,
+		_TokenManagement_BalanceCmd,
+		_TokenManagement_BalanceCmd_gen,
+		_TokenManagement_BalanceOfCmd,
+		_TokenManagement_BalanceOfCmd_gen,
+		_TokenManagement_DepositCmd,
+		_TokenManagement_DepositCmd_gen,
+		_TokenManagement_WithdrawCmd,
+		_TokenManagement_WithdrawCmd_gen,
+		_TokenManagement_MarketAllowanceCmd,
+		_TokenManagement_MarketAllowanceCmd_gen,
+		_TokenManagement_TransferCmd,
+		_TokenManagement_TransferCmd_gen,
+	)
+}
+
+// Blacklist
+var _BlacklistCmd = &cobra.Command{
+	Use:   "blacklist [method]",
+	Short: "Subcommand for the Blacklist service.",
+}
+
+var _Blacklist_ListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "Make the List method call, input-type: sonm.EthAddress output-type: sonm.BlacklistReply",
+	RunE: grpccmd.RunE(
+		"List",
+		"sonm.EthAddress",
+		func(c io.Closer) interface{} {
+			cc := c.(*grpc.ClientConn)
+			return NewBlacklistClient(cc)
+		},
+	),
+}
+
+var _Blacklist_ListCmd_gen = &cobra.Command{
+	Use:   "list-gen",
+	Short: "Generate JSON for method call of List (input-type: sonm.EthAddress)",
+	RunE:  grpccmd.TypeToJson("sonm.EthAddress"),
+}
+
+var _Blacklist_RemoveCmd = &cobra.Command{
+	Use:   "remove",
+	Short: "Make the Remove method call, input-type: sonm.EthAddress output-type: sonm.Empty",
+	RunE: grpccmd.RunE(
+		"Remove",
+		"sonm.EthAddress",
+		func(c io.Closer) interface{} {
+			cc := c.(*grpc.ClientConn)
+			return NewBlacklistClient(cc)
+		},
+	),
+}
+
+var _Blacklist_RemoveCmd_gen = &cobra.Command{
+	Use:   "remove-gen",
+	Short: "Generate JSON for method call of Remove (input-type: sonm.EthAddress)",
+	RunE:  grpccmd.TypeToJson("sonm.EthAddress"),
+}
+
+// Register commands with the root command and service command
+func init() {
+	grpccmd.RegisterServiceCmd(_BlacklistCmd)
+	_BlacklistCmd.AddCommand(
+		_Blacklist_ListCmd,
+		_Blacklist_ListCmd_gen,
+		_Blacklist_RemoveCmd,
+		_Blacklist_RemoveCmd_gen,
+	)
+}
+
+// Profiles
+var _ProfilesCmd = &cobra.Command{
+	Use:   "profiles [method]",
+	Short: "Subcommand for the Profiles service.",
+}
+
+var _Profiles_ListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "Make the List method call, input-type: sonm.ProfilesRequest output-type: sonm.ProfilesReply",
+	RunE: grpccmd.RunE(
+		"List",
+		"sonm.ProfilesRequest",
+		func(c io.Closer) interface{} {
+			cc := c.(*grpc.ClientConn)
+			return NewProfilesClient(cc)
+		},
+	),
+}
+
+var _Profiles_ListCmd_gen = &cobra.Command{
+	Use:   "list-gen",
+	Short: "Generate JSON for method call of List (input-type: sonm.ProfilesRequest)",
+	RunE:  grpccmd.TypeToJson("sonm.ProfilesRequest"),
+}
+
+var _Profiles_StatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Make the Status method call, input-type: sonm.EthID output-type: sonm.Profile",
+	RunE: grpccmd.RunE(
+		"Status",
+		"sonm.EthID",
+		func(c io.Closer) interface{} {
+			cc := c.(*grpc.ClientConn)
+			return NewProfilesClient(cc)
+		},
+	),
+}
+
+var _Profiles_StatusCmd_gen = &cobra.Command{
+	Use:   "status-gen",
+	Short: "Generate JSON for method call of Status (input-type: sonm.EthID)",
+	RunE:  grpccmd.TypeToJson("sonm.EthID"),
+}
+
+var _Profiles_RemoveAttributeCmd = &cobra.Command{
+	Use:   "removeAttribute",
+	Short: "Make the RemoveAttribute method call, input-type: sonm.BigInt output-type: sonm.Empty",
+	RunE: grpccmd.RunE(
+		"RemoveAttribute",
+		"sonm.BigInt",
+		func(c io.Closer) interface{} {
+			cc := c.(*grpc.ClientConn)
+			return NewProfilesClient(cc)
+		},
+	),
+}
+
+var _Profiles_RemoveAttributeCmd_gen = &cobra.Command{
+	Use:   "removeAttribute-gen",
+	Short: "Generate JSON for method call of RemoveAttribute (input-type: sonm.BigInt)",
+	RunE:  grpccmd.TypeToJson("sonm.BigInt"),
+}
+
+// Register commands with the root command and service command
+func init() {
+	grpccmd.RegisterServiceCmd(_ProfilesCmd)
+	_ProfilesCmd.AddCommand(
+		_Profiles_ListCmd,
+		_Profiles_ListCmd_gen,
+		_Profiles_StatusCmd,
+		_Profiles_StatusCmd_gen,
+		_Profiles_RemoveAttributeCmd,
+		_Profiles_RemoveAttributeCmd_gen,
+	)
+}
+
 // End grpccmd
 
-func init() { proto.RegisterFile("node.proto", fileDescriptor13) }
+func init() { proto.RegisterFile("node.proto", fileDescriptor9) }
 
-var fileDescriptor13 = []byte{
-	// 591 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x74, 0x54, 0xdd, 0x6e, 0xd3, 0x4c,
-	0x10, 0xb5, 0xdb, 0x7c, 0xfe, 0x9a, 0x49, 0x49, 0xd3, 0x2d, 0x85, 0xc8, 0x42, 0x55, 0x31, 0x88,
-	0x06, 0x04, 0x69, 0xe5, 0x4a, 0x45, 0x48, 0xdc, 0x44, 0x75, 0x90, 0x5c, 0xa5, 0x69, 0xe4, 0x94,
-	0x9f, 0x3b, 0xb4, 0x4d, 0xb6, 0xb1, 0x15, 0x7b, 0xd7, 0x78, 0xd7, 0x54, 0x3c, 0x01, 0xef, 0xc0,
-	0x1b, 0xf0, 0x96, 0x68, 0xbd, 0xeb, 0xc4, 0x69, 0x95, 0x3b, 0xcf, 0x99, 0x33, 0x73, 0x66, 0x67,
-	0x8e, 0x0c, 0x40, 0xd9, 0x94, 0x74, 0xd3, 0x8c, 0x09, 0x86, 0x6a, 0x9c, 0xd1, 0xc4, 0xde, 0x99,
-	0x30, 0x2a, 0x70, 0x44, 0x49, 0xa6, 0x60, 0xbb, 0x1e, 0xe6, 0x37, 0xfa, 0x73, 0x27, 0xa2, 0x92,
-	0x43, 0x23, 0xac, 0x81, 0xdd, 0x04, 0x67, 0x73, 0x22, 0xd2, 0x18, 0x4f, 0x74, 0x17, 0xe7, 0x1b,
-	0xa0, 0x0b, 0x16, 0xd1, 0x21, 0x11, 0x77, 0x2c, 0x9b, 0x07, 0xe4, 0x47, 0x4e, 0xb8, 0x40, 0x2f,
-	0xc1, 0x12, 0x98, 0xcf, 0x7d, 0xaf, 0x6d, 0x1e, 0x9a, 0x9d, 0x86, 0xbb, 0xdd, 0x95, 0x8d, 0xba,
-	0xd7, 0x05, 0x16, 0xe8, 0x1c, 0x7a, 0x06, 0x75, 0x5d, 0xe7, 0x7b, 0xed, 0x8d, 0x43, 0xb3, 0x53,
-	0x0f, 0x96, 0x80, 0xf3, 0x16, 0xc0, 0x23, 0x38, 0xe6, 0x01, 0x49, 0xe3, 0x5f, 0xe8, 0x00, 0x6a,
-	0x53, 0x82, 0xe3, 0xb6, 0x79, 0xb8, 0xd9, 0x69, 0xb8, 0xa0, 0xfa, 0xc9, 0x7c, 0x50, 0xe0, 0xce,
-	0x08, 0xac, 0xaf, 0x2c, 0x9b, 0x93, 0x0c, 0x35, 0x61, 0x43, 0xeb, 0xd6, 0x83, 0x0d, 0xdf, 0x43,
-	0x67, 0x60, 0x71, 0x81, 0x45, 0xce, 0x0b, 0x89, 0xa6, 0x7b, 0xa0, 0x6a, 0x15, 0x3b, 0x20, 0x31,
-	0x16, 0x11, 0xa3, 0x3c, 0x8c, 0xd2, 0x71, 0xc1, 0x0a, 0x34, 0xdb, 0xf9, 0x00, 0x3b, 0x8a, 0x33,
-	0x88, 0xb8, 0x50, 0x43, 0xbc, 0x82, 0xff, 0xef, 0x0a, 0x88, 0xeb, 0x39, 0xb6, 0x57, 0x7a, 0x95,
-	0xc9, 0x37, 0x17, 0xd0, 0x5e, 0xd7, 0x1e, 0x3d, 0x85, 0xbd, 0xa0, 0x3f, 0xe8, 0x5d, 0xfb, 0x57,
-	0xc3, 0xef, 0x9f, 0x87, 0xbd, 0xd1, 0x28, 0xb8, 0xfa, 0xd2, 0xf7, 0x5a, 0x06, 0xda, 0x87, 0xdd,
-	0x45, 0x62, 0x01, 0x9b, 0xee, 0xdf, 0x4d, 0x68, 0xca, 0xbd, 0x5d, 0x62, 0x8a, 0x67, 0x24, 0x21,
-	0x54, 0xa0, 0x63, 0xa8, 0xc9, 0x99, 0x50, 0x4b, 0xa9, 0xf7, 0x45, 0xd8, 0x9b, 0x4e, 0x33, 0xc2,
-	0xb9, 0xbd, 0xb7, 0xdc, 0xf3, 0x62, 0x6a, 0xc7, 0x40, 0xef, 0x60, 0x6b, 0x94, 0xf3, 0x50, 0xc2,
-	0xa8, 0xa1, 0x28, 0xe7, 0x61, 0x4e, 0xe7, 0x76, 0x53, 0x05, 0xa3, 0x8c, 0xcd, 0x64, 0xbd, 0x63,
-	0x74, 0xcc, 0x13, 0x13, 0xbd, 0x87, 0xff, 0xc6, 0x02, 0x67, 0x02, 0x3d, 0x51, 0xe9, 0x22, 0x90,
-	0xc5, 0xfa, 0xbc, 0xf6, 0xe3, 0x07, 0xb8, 0xd2, 0xf9, 0x08, 0x8d, 0x8a, 0x19, 0x50, 0x5b, 0xd1,
-	0x1e, 0xfa, 0xc3, 0xde, 0x55, 0x19, 0x8d, 0x8e, 0x53, 0x32, 0x71, 0x0c, 0x74, 0x0c, 0x96, 0xde,
-	0xd1, 0x8a, 0x5d, 0xec, 0xfd, 0x65, 0xa4, 0x4f, 0xa4, 0xe5, 0xce, 0xa0, 0x36, 0x60, 0x33, 0x8e,
-	0x2a, 0x04, 0x19, 0x97, 0x22, 0x7b, 0xab, 0x70, 0xf1, 0x62, 0xc7, 0x38, 0x31, 0xd1, 0x0b, 0xa8,
-	0x8d, 0x05, 0x4b, 0xef, 0xc9, 0xe8, 0xc5, 0xf4, 0x93, 0x54, 0xc8, 0xe6, 0xae, 0xdc, 0x59, 0x1c,
-	0x17, 0x3b, 0xd3, 0x02, 0x65, 0x5c, 0x0a, 0x54, 0x57, 0x29, 0x1b, 0xbb, 0xbf, 0x4d, 0x68, 0x4a,
-	0x4f, 0x56, 0x6e, 0x75, 0xa4, 0x6f, 0x55, 0x72, 0x59, 0x4e, 0x85, 0xdd, 0x5a, 0xda, 0x77, 0xf1,
-	0x98, 0xd7, 0x8b, 0xd7, 0x6f, 0xa9, 0xac, 0xef, 0x95, 0x2f, 0x90, 0x3c, 0x9f, 0xde, 0xb2, 0x92,
-	0xfa, 0x1c, 0xac, 0x4f, 0x11, 0x8d, 0x78, 0x58, 0xa1, 0xae, 0x4e, 0xef, 0xfe, 0x31, 0xa1, 0x75,
-	0x89, 0xb9, 0x20, 0x59, 0x65, 0x96, 0x53, 0x68, 0x28, 0x5b, 0xf2, 0xea, 0x48, 0x45, 0x49, 0xb9,
-	0xe4, 0x7b, 0x8e, 0x77, 0x0c, 0xd4, 0x81, 0x47, 0x0a, 0x3c, 0x67, 0xf4, 0x36, 0xca, 0x92, 0xb5,
-	0x9a, 0xe8, 0x08, 0xb6, 0x4b, 0xd7, 0x27, 0xec, 0x27, 0x59, 0x4b, 0xbc, 0xb1, 0x8a, 0x5f, 0xc7,
-	0xe9, 0xbf, 0x00, 0x00, 0x00, 0xff, 0xff, 0x56, 0x91, 0x5f, 0x7b, 0x8e, 0x04, 0x00, 0x00,
+var fileDescriptor9 = []byte{
+	// 1042 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x94, 0x56, 0xdd, 0x6e, 0xe3, 0x44,
+	0x14, 0x8e, 0xd3, 0x34, 0x4d, 0x4f, 0xda, 0xa6, 0x9d, 0x16, 0x28, 0xd6, 0x82, 0x2a, 0x83, 0xd8,
+	0x2c, 0x2c, 0xa1, 0xf2, 0x2e, 0xec, 0x22, 0xad, 0x90, 0xda, 0xa4, 0x88, 0xa0, 0x2d, 0x5b, 0xdc,
+	0x48, 0xe5, 0x0a, 0x69, 0x12, 0x4f, 0x92, 0x51, 0x9c, 0x19, 0xe3, 0x99, 0x34, 0xea, 0x9b, 0xf0,
+	0x00, 0x5c, 0x73, 0xcd, 0x93, 0xf0, 0x1a, 0xbc, 0x02, 0x1a, 0xcf, 0x4c, 0x63, 0x3b, 0xee, 0xae,
+	0xf6, 0xd2, 0xe7, 0x7c, 0xe7, 0xef, 0x3b, 0x33, 0x9f, 0x07, 0x80, 0xf1, 0x90, 0x74, 0xe2, 0x84,
+	0x4b, 0x8e, 0x6a, 0x82, 0xb3, 0xb9, 0xbb, 0x33, 0xa4, 0x13, 0xca, 0xa4, 0xb6, 0xb9, 0xad, 0x11,
+	0x67, 0x12, 0x53, 0x46, 0x12, 0x63, 0xd8, 0x0e, 0x97, 0x53, 0xeb, 0xa3, 0x4c, 0x45, 0x30, 0x8a,
+	0x8d, 0xe1, 0x60, 0x8e, 0x93, 0x19, 0x91, 0x71, 0x84, 0x47, 0x26, 0xa7, 0xbb, 0xb3, 0xe4, 0xc9,
+	0xcc, 0x06, 0x7b, 0xbf, 0x01, 0xfa, 0x99, 0x53, 0xf6, 0x0b, 0x91, 0xca, 0x1c, 0x90, 0x3f, 0x16,
+	0x44, 0x48, 0xf4, 0x39, 0xd4, 0x25, 0x16, 0xb3, 0x7e, 0xef, 0xd8, 0x39, 0x71, 0xda, 0x4d, 0x7f,
+	0xa7, 0xa3, 0xd2, 0x76, 0x06, 0xa9, 0x2d, 0x30, 0x3e, 0xf4, 0x08, 0xb6, 0x4d, 0x5c, 0xbf, 0x77,
+	0x5c, 0x3d, 0x71, 0xda, 0xdb, 0xc1, 0xca, 0xe0, 0xbd, 0x80, 0x96, 0xc2, 0xbf, 0xa6, 0x42, 0x66,
+	0xd2, 0x86, 0x04, 0x47, 0xc5, 0xb4, 0xe7, 0x74, 0xd2, 0x67, 0x32, 0x30, 0x3e, 0x6f, 0x09, 0xad,
+	0x5f, 0x17, 0x74, 0x34, 0x3b, 0x5f, 0xdc, 0xd9, 0x40, 0x0f, 0x36, 0x4b, 0xda, 0x31, 0x71, 0xda,
+	0x85, 0xbe, 0x84, 0x46, 0xb8, 0x48, 0xb0, 0xa4, 0x9c, 0xa5, 0xcd, 0x34, 0xfd, 0x3d, 0x0d, 0xeb,
+	0x19, 0x6b, 0x70, 0xef, 0x47, 0x47, 0xb0, 0x39, 0xe6, 0xc9, 0x88, 0x1c, 0x6f, 0x9c, 0x38, 0xed,
+	0x46, 0xa0, 0x3f, 0xbc, 0x08, 0x0e, 0x7a, 0x04, 0x47, 0x3f, 0x52, 0x46, 0xc5, 0xd4, 0x96, 0x7e,
+	0x04, 0x55, 0x1a, 0x96, 0xd6, 0xad, 0xd2, 0x10, 0x7d, 0x0f, 0xbb, 0xc3, 0x08, 0x8f, 0x66, 0x11,
+	0x15, 0x72, 0x70, 0x17, 0x93, 0xb4, 0xf2, 0x9e, 0x7f, 0x68, 0x80, 0x59, 0x57, 0x90, 0x47, 0x7a,
+	0x4f, 0x01, 0x54, 0x35, 0x11, 0x90, 0x38, 0xba, 0x43, 0x9f, 0x42, 0x4d, 0x8d, 0x7f, 0xec, 0x9c,
+	0x6c, 0xb4, 0x9b, 0x3e, 0x98, 0xce, 0x09, 0x8e, 0x82, 0xd4, 0xee, 0x71, 0x68, 0xbd, 0x89, 0x09,
+	0x4b, 0x2d, 0x2b, 0x52, 0x86, 0x34, 0x7c, 0x88, 0x94, 0xd4, 0xb5, 0x22, 0xae, 0xfa, 0x30, 0x71,
+	0xe5, 0x64, 0x50, 0x38, 0xbc, 0x49, 0x0f, 0x4a, 0x40, 0xe6, 0xfc, 0x96, 0xd8, 0xa2, 0x6d, 0xa8,
+	0xcf, 0xb1, 0x90, 0x24, 0x31, 0x55, 0xf7, 0x75, 0xc6, 0x0b, 0x39, 0x3d, 0x0b, 0xc3, 0x84, 0x08,
+	0x11, 0x18, 0xbf, 0x42, 0xea, 0x93, 0x66, 0x6a, 0x97, 0x20, 0xb5, 0xdf, 0x7b, 0x05, 0x2d, 0x5d,
+	0x4a, 0x9f, 0x15, 0x45, 0xc7, 0x13, 0xd8, 0xd2, 0x4e, 0x61, 0x18, 0x69, 0x19, 0x46, 0x6e, 0x7e,
+	0x32, 0x5d, 0x59, 0xbf, 0xf7, 0x97, 0x03, 0x3b, 0xe7, 0x38, 0xc2, 0x6c, 0x44, 0x74, 0x6c, 0x07,
+	0x9a, 0x11, 0xbd, 0x25, 0xc6, 0x56, 0xca, 0x4e, 0x16, 0xa0, 0xf0, 0x82, 0x86, 0xf7, 0xf8, 0x32,
+	0xa6, 0xb2, 0x00, 0xf4, 0x1c, 0xf6, 0x54, 0xf8, 0x85, 0x9c, 0xda, 0x90, 0x8d, 0x92, 0x90, 0x02,
+	0xc6, 0xfb, 0x1d, 0x8e, 0x06, 0x7c, 0x46, 0xd8, 0x20, 0xc1, 0x4c, 0x8c, 0x15, 0xad, 0x9a, 0xd0,
+	0x13, 0xa8, 0x4a, 0xfe, 0x20, 0x99, 0x55, 0xc9, 0xd5, 0xad, 0xc1, 0x73, 0xbe, 0x60, 0xb2, 0xb4,
+	0x35, 0xe3, 0xf3, 0xff, 0xde, 0x80, 0x3d, 0x75, 0xdf, 0x2e, 0x31, 0xc3, 0x13, 0x32, 0x27, 0x4c,
+	0xa2, 0xe7, 0x50, 0x53, 0x8c, 0xa2, 0x0f, 0x56, 0xb7, 0x37, 0x73, 0x1b, 0xdd, 0xc3, 0xa2, 0x39,
+	0x8e, 0xee, 0xbc, 0x0a, 0xfa, 0x1a, 0x1a, 0x57, 0x0b, 0x31, 0x55, 0x66, 0xd4, 0xd4, 0x90, 0xee,
+	0x74, 0xc1, 0x66, 0xae, 0xb9, 0x4e, 0x57, 0x09, 0x9f, 0xa8, 0xde, 0xbc, 0x4a, 0xdb, 0x39, 0x75,
+	0xd0, 0x0b, 0xd8, 0xbc, 0x96, 0x38, 0x91, 0xe8, 0x43, 0xed, 0x4e, 0x3f, 0x54, 0xb0, 0x2d, 0x73,
+	0xb4, 0x66, 0xd7, 0x75, 0x5e, 0x41, 0x33, 0xa3, 0x3c, 0xe8, 0x58, 0xc3, 0xd6, 0xc5, 0xc8, 0x3d,
+	0xd0, 0x1e, 0x63, 0xbd, 0x8e, 0xc9, 0xc8, 0xab, 0xa0, 0x6f, 0xa0, 0x7e, 0x2d, 0xb1, 0x5c, 0x08,
+	0x94, 0xd3, 0x26, 0x37, 0x33, 0xab, 0xf6, 0xdb, 0x72, 0xdf, 0x41, 0xed, 0x35, 0x9f, 0x88, 0x1c,
+	0x19, 0x7c, 0x22, 0xca, 0xc8, 0xe0, 0x13, 0x91, 0x4e, 0xec, 0x55, 0x4e, 0x1d, 0xf4, 0x19, 0xd4,
+	0xae, 0x25, 0x8f, 0x0b, 0x65, 0x0c, 0x31, 0x17, 0xf3, 0x58, 0xaa, 0xe4, 0xbe, 0xe2, 0x2c, 0x8a,
+	0x52, 0xce, 0x4c, 0x01, 0xfb, 0x6d, 0x0b, 0x64, 0xa9, 0x54, 0x89, 0xfd, 0xff, 0x36, 0x60, 0x4f,
+	0x5d, 0xe7, 0xcc, 0xc2, 0x1e, 0x9b, 0x85, 0x59, 0xac, 0x5a, 0xac, 0xbb, 0xbf, 0xd2, 0x02, 0xb1,
+	0xda, 0x51, 0x61, 0x7a, 0x7d, 0x18, 0xec, 0x14, 0x0a, 0xdb, 0x67, 0x63, 0x6e, 0xe1, 0xa7, 0x50,
+	0xd7, 0xa2, 0x86, 0x3e, 0x5a, 0x01, 0x72, 0x32, 0x57, 0x1c, 0xe8, 0x2b, 0xa8, 0x29, 0xb9, 0xb1,
+	0xc3, 0x14, 0xa4, 0xc7, 0xcd, 0xe8, 0x93, 0x57, 0x41, 0x5d, 0x40, 0xdd, 0x29, 0x66, 0x13, 0x2b,
+	0x12, 0x22, 0x1d, 0x22, 0xdf, 0xd9, 0x27, 0xab, 0x88, 0x3c, 0xd6, 0xf6, 0xf8, 0x03, 0x1c, 0x76,
+	0x13, 0x82, 0x25, 0xc9, 0xb9, 0xb3, 0x0d, 0xe7, 0x1c, 0x6e, 0x2e, 0xbd, 0x57, 0x41, 0xcf, 0xe0,
+	0xe8, 0x2c, 0x8e, 0x13, 0x7e, 0x5b, 0x48, 0x90, 0x6f, 0x63, 0x6d, 0x6f, 0x87, 0x5d, 0x75, 0x3b,
+	0xa3, 0xf7, 0x88, 0x79, 0x09, 0x0d, 0xfb, 0x7b, 0xb2, 0xf4, 0x14, 0x7e, 0x57, 0x0f, 0xac, 0xc1,
+	0xff, 0xc7, 0x81, 0xfd, 0xcb, 0x54, 0x1c, 0x33, 0x3b, 0x7f, 0x09, 0x4d, 0xad, 0x68, 0x9a, 0xb5,
+	0x35, 0x09, 0xb0, 0x27, 0xba, 0xa0, 0x90, 0xe9, 0x56, 0x77, 0xb5, 0xb1, 0xcb, 0xd9, 0x98, 0x26,
+	0xf3, 0x92, 0xd8, 0xb5, 0xd6, 0x77, 0xb2, 0x9a, 0x8e, 0x3e, 0xce, 0xa6, 0xce, 0xe9, 0x7c, 0x21,
+	0xd2, 0xff, 0xb7, 0x0a, 0xad, 0x54, 0xbe, 0x32, 0x9d, 0xb7, 0x01, 0x06, 0x44, 0xc8, 0xd4, 0x2c,
+	0x50, 0x36, 0xa0, 0x58, 0xf7, 0x29, 0x6c, 0x59, 0xf1, 0xcc, 0xc1, 0x90, 0xe1, 0x39, 0xa3, 0xde,
+	0xe9, 0x26, 0xb7, 0x8d, 0xe5, 0xcd, 0xb8, 0x64, 0xa6, 0xf2, 0xa0, 0x2f, 0x60, 0xab, 0x47, 0x62,
+	0x2e, 0xe8, 0x3b, 0xb6, 0xf7, 0x18, 0x1a, 0x37, 0x54, 0x4e, 0xc3, 0x04, 0x2f, 0xdf, 0x0e, 0xec,
+	0x40, 0xeb, 0x32, 0x7d, 0x3b, 0x9d, 0x45, 0x11, 0x5f, 0xae, 0xf7, 0x5e, 0x3c, 0x7f, 0xdf, 0x42,
+	0xc3, 0x4a, 0x3b, 0x72, 0x8d, 0x56, 0x94, 0xe8, 0x7d, 0x91, 0xd8, 0x29, 0x6c, 0xdf, 0xbf, 0x12,
+	0xd0, 0xa9, 0xb9, 0xff, 0xeb, 0x43, 0x1f, 0x15, 0x1e, 0x14, 0x76, 0xec, 0x27, 0x50, 0x37, 0xbb,
+	0x7c, 0xd7, 0xf2, 0xfd, 0x3f, 0x1d, 0x68, 0x5c, 0x25, 0x7c, 0x4c, 0x23, 0x22, 0x8a, 0xbf, 0x06,
+	0x6b, 0x2f, 0x1c, 0xe0, 0x95, 0xd9, 0x92, 0x6c, 0x65, 0xa7, 0x79, 0x5f, 0xad, 0xdf, 0x73, 0x77,
+	0x73, 0x68, 0xcd, 0x9d, 0xee, 0xea, 0x4c, 0xca, 0x84, 0x0e, 0x17, 0x92, 0xbc, 0x95, 0xeb, 0x61,
+	0x3d, 0x7d, 0x8b, 0x3e, 0xfb, 0x3f, 0x00, 0x00, 0xff, 0xff, 0x3b, 0x01, 0xdc, 0x72, 0xfb, 0x0a,
+	0x00, 0x00,
 }

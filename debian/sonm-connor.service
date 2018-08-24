@@ -1,0 +1,14 @@
+[Unit]
+Description=SONM Connor
+
+
+[Service]
+EnvironmentFile=/etc/default/sonm-connor
+Type=simple
+ExecStart=/usr/bin/sonmconnor --config=${CONFIG_PATH}
+Restart=on-failure
+
+
+[Install]
+Wants=network-online.target
+After=network.target network-online.target

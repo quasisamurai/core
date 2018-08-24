@@ -7,7 +7,9 @@ EnvironmentFile=/etc/default/sonm-rendezvous
 Type=simple
 ExecStart=/usr/bin/sonmrendezvous --config=${CONFIG_PATH}
 Restart=on-failure
+LimitNOFILE=65535
 
 
 [Install]
-WantedBy=multi-user.target
+Wants=network-online.target
+After=network.target network-online.target

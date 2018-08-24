@@ -1,24 +1,28 @@
 # An endpoint for client connections using cli
 # allowed format is "ip:port" to bind Worker to given IP address
-# or ":port" to bind Hub to all available IPs
+# or ":port" to bind Worker to all available IPs
 endpoint: ":15010"
 
-# blockchain-specific settings.
-ethereum:
-  # path to keystore
-  key_store: "./keys"
-  # passphrase for keystore
-  pass_phrase: "any"
+# Admin key is a key that allows to use worker management API without
+# configuring master key.
+# Useful for development and/or debugging.
+# admin: 0x000000000000000000000000000000000000000f
 
+# Master key is a key that receives all payments for deals
+# This worker should be confirmed by master via sonmcli master confirm,
+# it's eth addr can be found in logs.
+# Private key is also exported in /var/lib/sonm/worker_keystore with "sonm" passphrase
+# This option is required.
+# master: 0x0000000000000000000000000000000000000001
 
 # NAT punching settings.
 npp:
   rendezvous:
     endpoints:
-      - 0x8125721C2413d99a33E351e1F6Bb4e56b6b633FD@127.0.0.1:14099
+      - 0x5b7d6516fad04e10db726933bcd75447fd7b4b17@rendezvous.livenet.sonm.com:14099
   relay:
     endpoints:
-      - 127.0.0.1:12240
+      - relay.livenet.sonm.com:12240
 
 #  Resources section is available only on Linux
 #  If configured, all tasks will share this pool of resources.
@@ -38,7 +42,7 @@ npp:
 #    network:
 #      classID: 1048577
 
-# A list of IPs that can be used to reach the miner, optional param. If not provided, miner's interfaces will
+# A list of IPs that can be used to reach the worker, optional param. If not provided, worker's interfaces will
 # be scanned for such IPs (if there's no firewall settings).
 # Ignored if firewall settings are not null.
 # public_ip_addrs: ["12.34.56.78", "1.2.3.4"]
@@ -49,16 +53,23 @@ logging:
   level: debug
 
 store:
-  path: "/var/lib/sonm/worker.boltdb"
+  endpoint: "/var/lib/sonm/worker.boltdb"
 
 benchmarks:
   # URL to download benchmark list, use `file://` schema to load file from a filesystem.
-  url: "https://raw.githubusercontent.com/sonm-io/allowed-list/master/benchmarks_list.json"
+  url: "https://raw.githubusercontent.com/sonm-io/benchmarks-list/master/list.json"
 
 whitelist:
   # URL to downloads list of allowed containers.
   url: "https://raw.githubusercontent.com/sonm-io/allowed-list/master/general_whitelist.json"
   enabled: true
+
+matcher:
+  poll_delay: 10s
+  query_limit: 100
+
+dwh:
+  endpoint: "0xadffcac607a0a1b583c489977eae413a62d4bc73@dwh.livenet.sonm.com:15021"
 
 plugins:
   socket_dir: /run/docker/plugins
@@ -66,11 +77,14 @@ plugins:
 #  gpus:
 #    nvidia: {}
 #    radeon: {}
+#    fake:
+#      device_count: 4
 
   volume:
     root: /var/lib/docker-volumes
     drivers:
 #      cifs: {}
+#      btfs: {}
 
   overlay:
     drivers:

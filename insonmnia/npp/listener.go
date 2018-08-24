@@ -9,33 +9,74 @@ import (
 	"net"
 	"time"
 
+	"github.com/sonm-io/core/insonmnia/npp/relay"
 	"go.uber.org/zap"
 )
 
+type connSource int
+
+func (m connSource) String() string {
+	switch m {
+	case sourceDirectConnection:
+		return "direct"
+	case sourceNPPConnection:
+		return "NPP"
+	case sourceRelayedConnection:
+		return "relay"
+	default:
+		return "unknown source"
+	}
+}
+
+const (
+	sourceError connSource = iota
+	sourceDirectConnection
+	sourceNPPConnection
+	sourceRelayedConnection
+)
+
 type connTuple struct {
-	net.Conn
-	err error
+	conn net.Conn
+	err  error
 }
 
 func newConnTuple(conn net.Conn, err error) connTuple {
 	return connTuple{conn, err}
 }
 
+func (m *connTuple) RemoteAddr() net.Addr {
+	if m == nil || m.conn == nil {
+		return nil
+	}
+	return m.conn.RemoteAddr()
+}
+
+func (m *connTuple) Close() error {
+	if m == nil || m.conn == nil {
+		return nil
+	}
+	return m.conn.Close()
+}
+
 func (m *connTuple) Error() error {
 	return m.err
 }
 
-func (m *connTuple) IsTransportError() bool {
+func (m *connTuple) IsRendezvousError() bool {
 	if m.err == nil {
 		return false
 	}
 
-	_, ok := m.err.(TransportError)
+	_, ok := m.err.(*rendezvousError)
 	return ok
 }
 
 func (m *connTuple) unwrap() (net.Conn, error) {
-	return m.Conn, m.err
+	return m.conn, m.err
+}
+
+func (m *connTuple) unwrapWithSource(source connSource) (net.Conn, connSource, error) {
+	return m.conn, source, m.err
 }
 
 // Listener specifies a net.Listener wrapper that is aware of NAT Punching
@@ -43,18 +84,20 @@ func (m *connTuple) unwrap() (net.Conn, error) {
 //
 // Options are: rendezvous server, private IPs usage, relay server(s) if any.
 type Listener struct {
-	ctx context.Context
-	log *zap.Logger
+	metrics *metrics
+	ctx     context.Context // Required here, because of gRPC server, which can't stop properly even if "Stop" called.
+	cancel  context.CancelFunc
+	log     *zap.Logger
 
 	listener        net.Listener
 	listenerChannel chan connTuple
 
 	puncher    NATPuncher
-	puncherNew func() (NATPuncher, error)
+	puncherNew func(ctx context.Context) (NATPuncher, error)
 	nppChannel chan connTuple
 
-	relayNew     func() (net.Conn, error)
-	relayChannel chan connTuple
+	relayListener *relay.Listener
+	relayChannel  chan connTuple
 
 	minBackoffInterval time.Duration
 	maxBackoffInterval time.Duration
@@ -63,8 +106,8 @@ type Listener struct {
 // NewListener constructs a new NPP listener that will listen the specified
 // network address with TCP protocol, switching to the NPP when there is no
 // pending connections available.
-func NewListener(ctx context.Context, addr string, options ...Option) (net.Listener, error) {
-	opts := newOptions(ctx)
+func NewListener(ctx context.Context, addr string, options ...Option) (*Listener, error) {
+	opts := newOptions()
 
 	for _, o := range options {
 		if err := o(opts); err != nil {
@@ -79,8 +122,11 @@ func NewListener(ctx context.Context, addr string, options ...Option) (net.Liste
 		return nil, err
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
 	m := &Listener{
+		metrics:         newMetrics(),
 		ctx:             ctx,
+		cancel:          cancel,
 		log:             opts.log,
 		listenerChannel: channel,
 		listener:        listener,
@@ -88,28 +134,32 @@ func NewListener(ctx context.Context, addr string, options ...Option) (net.Liste
 		puncherNew:      opts.puncherNew,
 		nppChannel:      make(chan connTuple, opts.nppBacklog),
 
-		relayNew:     opts.relayNew,
-		relayChannel: make(chan connTuple, opts.nppBacklog),
+		relayListener: opts.relayListener,
+		relayChannel:  make(chan connTuple, opts.nppBacklog),
 
-		minBackoffInterval: 500 * time.Millisecond,
-		maxBackoffInterval: 8000 * time.Millisecond,
+		minBackoffInterval: opts.nppMinBackoffInterval,
+		maxBackoffInterval: opts.nppMaxBackoffInterval,
 	}
 
-	go m.listen()
+	go m.listen(ctx)
 	go m.listenPuncher(ctx)
 	go m.listenRelay(ctx)
 
 	return m, nil
 }
 
-func (m *Listener) listen() error {
-	defer m.log.Info("finished listening")
-
+func (m *Listener) listen(ctx context.Context) {
 	for {
 		conn, err := m.listener.Accept()
-		m.listenerChannel <- connTuple{conn, err}
+		select {
+		case m.listenerChannel <- newConnTuple(conn, err):
+		case <-ctx.Done():
+			m.log.Info("finished listening due to cancellation", zap.Error(ctx.Err()))
+			return
+		}
 		if err != nil {
-			return err
+			m.log.Info("finished listening on Accept error", zap.Error(err))
+			return
 		}
 	}
 }
@@ -118,6 +168,8 @@ func (m *Listener) listenPuncher(ctx context.Context) error {
 	if m.puncherNew == nil {
 		return nil
 	}
+
+	defer m.log.Info("finished listening NPP")
 
 	timeout := m.minBackoffInterval
 	for {
@@ -133,7 +185,7 @@ func (m *Listener) listenPuncher(ctx context.Context) error {
 
 		if m.puncher == nil {
 			m.log.Debug("constructing new puncher")
-			puncher, err := m.puncherNew()
+			puncher, err := m.puncherNew(ctx)
 			if err != nil {
 				m.log.Warn("failed to construct a puncher", zap.Error(err))
 				if timeout < m.maxBackoffInterval {
@@ -153,9 +205,11 @@ func (m *Listener) listenPuncher(ctx context.Context) error {
 }
 
 func (m *Listener) listenRelay(ctx context.Context) error {
-	if m.relayNew == nil {
+	if m.relayListener == nil {
 		return nil
 	}
+
+	defer m.log.Info("finished listening Relay")
 
 	timeout := m.minBackoffInterval
 
@@ -171,7 +225,7 @@ func (m *Listener) listenRelay(ctx context.Context) error {
 
 		m.log.Debug("connecting using relay")
 
-		conn, err := m.relayNew()
+		conn, err := m.relayListener.Accept()
 		if err != nil {
 			m.log.Warn("failed to relay", zap.Error(err))
 			if timeout < m.maxBackoffInterval {
@@ -196,39 +250,68 @@ func (m *Listener) listenRelay(ctx context.Context) error {
 // punching mechanism work. This can consume a meaningful amount of file
 // descriptors, so be prepared to enlarge your limits.
 func (m *Listener) Accept() (net.Conn, error) {
+	return m.AcceptContext(m.ctx)
+}
+
+func (m *Listener) AcceptContext(ctx context.Context) (net.Conn, error) {
+	conn, source, err := m.accept(ctx)
+	if err != nil {
+		m.log.Warn("failed to accept peer", zap.Error(err))
+		return nil, err
+	}
+
+	m.log.Info("accepted peer", zap.Stringer("source", source), zap.Stringer("remote", conn.RemoteAddr()))
+
+	switch source {
+	case sourceDirectConnection:
+		m.metrics.NumConnectionsDirect.Inc()
+	case sourceNPPConnection:
+		m.metrics.NumConnectionsNAT.Inc()
+	case sourceRelayedConnection:
+		m.metrics.NumConnectionsRelay.Inc()
+	default:
+		return nil, fmt.Errorf("unknown connection source")
+	}
+
+	return conn, nil
+}
+
+// Note: this function only listens for multiple channels and transforms the
+// result from a single-value to multiple values, due to weird Go type system.
+func (m *Listener) accept(ctx context.Context) (net.Conn, connSource, error) {
 	// Act as a listener if there is no puncher specified.
 	// Check for acceptor listenerChannel, if there is a connection - return immediately.
 	select {
 	case conn := <-m.listenerChannel:
-		m.log.Info("received acceptor peer", zap.Any("conn", conn))
-		return conn.unwrap()
+		return conn.unwrapWithSource(sourceDirectConnection)
 	default:
 	}
 
 	// Otherwise block when either a new connection arrives or NPP does its job.
 	for {
 		select {
-		case <-m.ctx.Done():
-			return nil, m.ctx.Err()
+		case <-ctx.Done():
+			return nil, sourceError, ctx.Err()
 		case conn := <-m.listenerChannel:
-			m.log.Info("received acceptor peer", zap.Any("conn", conn), zap.Error(conn.err))
-			return conn.unwrap()
+			return conn.unwrapWithSource(sourceDirectConnection)
 		case conn := <-m.nppChannel:
-			m.log.Info("received NPP peer", zap.Any("conn", conn), zap.Error(conn.err))
-			if conn.IsTransportError() {
+			// In case of any rendezvous errors it's better to reconnect.
+			// Just in case.
+			if conn.IsRendezvousError() {
 				m.puncher.Close()
 				m.puncher = nil
 			} else {
-				return conn.unwrap()
+				return conn.unwrapWithSource(sourceNPPConnection)
 			}
 		case conn := <-m.relayChannel:
-			m.log.Info("received relay peer", zap.Any("conn", conn), zap.Error(conn.err))
-			return conn.unwrap()
+			return conn.unwrapWithSource(sourceRelayedConnection)
 		}
 	}
 }
 
 func (m *Listener) Close() error {
+	m.cancel()
+
 	var errs []error
 
 	if err := m.listener.Close(); err != nil {
@@ -249,4 +332,18 @@ func (m *Listener) Close() error {
 
 func (m *Listener) Addr() net.Addr {
 	return m.listener.Addr()
+}
+
+func (m *Listener) Metrics() ListenerMetrics {
+	var rendezvousAddr net.Addr
+	if m.puncher != nil {
+		rendezvousAddr = m.puncher.RemoteAddr()
+	}
+
+	return ListenerMetrics{
+		RendezvousAddr:       rendezvousAddr,
+		NumConnectionsDirect: m.metrics.NumConnectionsDirect.Load(),
+		NumConnectionsNAT:    m.metrics.NumConnectionsNAT.Load(),
+		NumConnectionsRelay:  m.metrics.NumConnectionsRelay.Load(),
+	}
 }

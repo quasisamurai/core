@@ -1,7 +1,6 @@
 package sonm
 
 import (
-	"encoding/json"
 	"fmt"
 	"math/big"
 
@@ -38,6 +37,9 @@ func NewBigIntFromString(s string) (*BigInt, error) {
 // Unwrap returns the current price as *big.Int.
 func (m *BigInt) Unwrap() *big.Int {
 	v := new(big.Int)
+	if m == nil {
+		return v
+	}
 	v.SetBytes(m.Abs)
 	if m.Neg {
 		v.Neg(v)
@@ -53,25 +55,17 @@ func (m *BigInt) Cmp(other *BigInt) int {
 	return m.Unwrap().Cmp(other.Unwrap())
 }
 
-func (m BigInt) MarshalJSON() ([]byte, error) {
-	return json.Marshal(m.Unwrap().String())
+func (m BigInt) MarshalText() (text []byte, err error) {
+	return []byte(m.Unwrap().String()), nil
 }
 
-func (m *BigInt) UnmarshalJSON(data []byte) error {
-	var unmarshaled string
-	err := json.Unmarshal(data, &unmarshaled)
+func (m *BigInt) UnmarshalText(text []byte) error {
+	unmarshalled, err := NewBigIntFromString(string(text))
 	if err != nil {
 		return err
 	}
-
-	v, err := NewBigIntFromString(unmarshaled)
-	if err != nil {
-		return err
-	}
-
-	m.Abs = v.Abs
-	m.Neg = v.Neg
-
+	m.Abs = unmarshalled.Abs
+	m.Neg = unmarshalled.Neg
 	return nil
 }
 
@@ -85,4 +79,12 @@ func (m *BigInt) ToPriceString() string {
 
 func (m *BigInt) PaddedString() string {
 	return util.BigIntToPaddedString(m.Unwrap())
+}
+
+func (m *BigInt) IsZero() bool {
+	if m == nil {
+		return true
+	}
+
+	return m.Unwrap().BitLen() == 0
 }

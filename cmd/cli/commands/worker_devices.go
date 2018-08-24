@@ -1,32 +1,36 @@
 package commands
 
 import (
-	"os"
+	"fmt"
 
 	pb "github.com/sonm-io/core/proto"
 	"github.com/spf13/cobra"
 )
 
 var workerDevicesCmd = &cobra.Command{
-	Use:    "devices",
-	Short:  "Show Worker's hardware",
-	PreRun: loadKeyStoreIfRequired,
-	Run: func(cmd *cobra.Command, args []string) {
-		ctx, cancel := newTimeoutContext()
-		defer cancel()
-
-		hub, err := newWorkerManagementClient(ctx)
+	Use:   "devices",
+	Short: "Show Worker's hardware",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		devices, err := worker.Devices(workerCtx, &pb.Empty{})
 		if err != nil {
-			showError(cmd, "Cannot create client connection", err)
-			os.Exit(1)
-		}
-
-		devices, err := hub.Devices(ctx, &pb.Empty{})
-		if err != nil {
-			showError(cmd, "Cannot get devices list", err)
-			os.Exit(1)
+			return fmt.Errorf("cannot get devices list: %v", err)
 		}
 
 		printDeviceList(cmd, devices)
+		return nil
+	},
+}
+
+var workerFreeDevicesCmd = &cobra.Command{
+	Use:   "free_devices",
+	Short: "Show Worker's hardware with remaining resources available for scheduling",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		devices, err := worker.FreeDevices(workerCtx, &pb.Empty{})
+		if err != nil {
+			return fmt.Errorf("cannot get devices list: %v", err)
+		}
+
+		printDeviceList(cmd, devices)
+		return nil
 	},
 }

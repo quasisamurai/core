@@ -3,8 +3,13 @@ package node
 import (
 	"github.com/jinzhu/configor"
 	"github.com/sonm-io/core/accounts"
+	"github.com/sonm-io/core/blockchain"
+	"github.com/sonm-io/core/insonmnia/benchmarks"
+	"github.com/sonm-io/core/insonmnia/dwh"
 	"github.com/sonm-io/core/insonmnia/logging"
+	"github.com/sonm-io/core/insonmnia/matcher"
 	"github.com/sonm-io/core/insonmnia/npp"
+	"github.com/sonm-io/core/util/debug"
 )
 
 type nodeConfig struct {
@@ -13,30 +18,23 @@ type nodeConfig struct {
 	AllowInsecureConnection bool   `yaml:"allow_insecure_connection" default:"false"`
 }
 
-type hubConfig struct {
-	Endpoint string `required:"false" yaml:"endpoint"`
-}
-
-type dwhConfig struct {
-	Endpoint string `required:"false" yaml:"endpoint"`
-}
-
 type Config struct {
-	Node              nodeConfig         `yaml:"node"`
-	NPP               npp.Config         `yaml:"npp"`
-	Log               logging.Config     `yaml:"log"`
-	Eth               accounts.EthConfig `yaml:"ethereum" required:"false"`
-	Hub               hubConfig          `yaml:"hub" required:"false"`
-	DWH               dwhConfig          `yaml:"dwh"`
-	MetricsListenAddr string             `yaml:"metrics_listen_addr" default:"127.0.0.1:14003"`
+	Node              nodeConfig          `yaml:"node"`
+	NPP               npp.Config          `yaml:"npp"`
+	Log               logging.Config      `yaml:"log"`
+	Blockchain        *blockchain.Config  `yaml:"blockchain"`
+	Eth               accounts.EthConfig  `yaml:"ethereum" required:"false"`
+	DWH               dwh.YAMLConfig      `yaml:"dwh"`
+	MetricsListenAddr string              `yaml:"metrics_listen_addr" default:"127.0.0.1:14003"`
+	Benchmarks        benchmarks.Config   `yaml:"benchmarks"`
+	Matcher           *matcher.YAMLConfig `yaml:"matcher"`
+	Debug             *debug.Config       `yaml:"debug"`
 }
 
 // NewConfig loads localNode config from given .yaml file
 func NewConfig(path string) (*Config, error) {
 	cfg := &Config{}
-
-	err := configor.Load(cfg, path)
-	if err != nil {
+	if err := configor.Load(cfg, path); err != nil {
 		return nil, err
 	}
 

@@ -2,14 +2,11 @@ package npp
 
 import (
 	"context"
-	"crypto/ecdsa"
 	"fmt"
-	"net"
+	"time"
 
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/sonm-io/core/insonmnia/auth"
 	"github.com/sonm-io/core/insonmnia/npp/relay"
-	"github.com/sonm-io/core/util/netutil"
+	"github.com/sonm-io/core/insonmnia/npp/rendezvous"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/credentials"
 )
@@ -18,18 +15,22 @@ import (
 type Option func(o *options) error
 
 type options struct {
-	ctx        context.Context
-	log        *zap.Logger
-	puncher    NATPuncher
-	puncherNew func() (NATPuncher, error)
-	nppBacklog int
-	relayNew   func() (net.Conn, error)
+	log                   *zap.Logger
+	puncher               NATPuncher
+	puncherNew            func(ctx context.Context) (NATPuncher, error)
+	nppBacklog            int
+	nppMinBackoffInterval time.Duration
+	nppMaxBackoffInterval time.Duration
+	relayListener         *relay.Listener
+	relayDialer           *relay.Dialer
 }
 
-func newOptions(ctx context.Context) *options {
+func newOptions() *options {
 	return &options{
-		ctx:        ctx,
-		nppBacklog: 128,
+		log:                   zap.NewNop(),
+		nppBacklog:            128,
+		nppMinBackoffInterval: 500 * time.Millisecond,
+		nppMaxBackoffInterval: 8000 * time.Millisecond,
 	}
 }
 
@@ -38,17 +39,21 @@ func newOptions(ctx context.Context) *options {
 // Without this option no intermediate server will be used for obtaining
 // peer's endpoints and the entire connection establishment process will fall
 // back to the old good plain TCP connection.
-func WithRendezvous(addrs []auth.Addr, credentials credentials.TransportCredentials) Option {
+func WithRendezvous(cfg rendezvous.Config, credentials credentials.TransportCredentials) Option {
 	return func(o *options) error {
-		o.puncherNew = func() (NATPuncher, error) {
-			for _, addr := range addrs {
-				client, err := newRendezvousClient(o.ctx, addr, credentials)
+		if len(cfg.Endpoints) == 0 {
+			return nil
+		}
+
+		o.puncherNew = func(ctx context.Context) (NATPuncher, error) {
+			for _, addr := range cfg.Endpoints {
+				client, err := newRendezvousClient(ctx, addr, credentials)
 				if err == nil {
-					return newNATPuncher(o.ctx, client)
+					return newNATPuncher(ctx, cfg, client, o.log)
 				}
 			}
 
-			return nil, fmt.Errorf("failed to connect to %+v", addrs)
+			return nil, fmt.Errorf("failed to connect to %+v", cfg.Endpoints)
 		}
 
 		return nil
@@ -74,45 +79,36 @@ func WithNPPBacklog(backlog int) Option {
 	}
 }
 
-// WithRelay is an option that specifies Relay client settings.
-//
-// Without this option no intermediate server will be used for relaying
-// TCP.
-func WithRelay(addrs []netutil.TCPAddr, key *ecdsa.PrivateKey) Option {
+// WithNPPBackoff is an option that specifies NPP timeouts.
+func WithNPPBackoff(min, max time.Duration) Option {
 	return func(o *options) error {
-		signedAddr, err := relay.NewSignedAddr(key)
-		if err != nil {
-			return err
-		}
-
-		o.relayNew = func() (net.Conn, error) {
-			for _, addr := range addrs {
-				conn, err := relay.Listen(&addr, signedAddr)
-				if err == nil {
-					return conn, nil
-				}
-			}
-
-			return nil, fmt.Errorf("failed to connect to %+v", addrs)
-		}
-
+		o.nppMinBackoffInterval = min
+		o.nppMaxBackoffInterval = max
 		return nil
 	}
 }
 
-func WithRelayClient(addrs []netutil.TCPAddr, target common.Address) Option {
+// WithRelayListener is an option that activates Relay fallback on a NPP
+// listener.
+//
+// Without this option no intermediate server will be used for relaying
+// TCP.
+func WithRelayListener(listener *relay.Listener) Option {
 	return func(o *options) error {
-		o.relayNew = func() (net.Conn, error) {
-			for _, addr := range addrs {
-				conn, err := relay.Dial(&addr, target, "")
-				if err == nil {
-					return conn, nil
-				}
-			}
+		o.relayListener = listener
+		return nil
+	}
+}
 
-			return nil, fmt.Errorf("failed to connect to %+v", addrs)
-		}
-
+// WithRelayDialer is an option that activates Relay fallback on a NPP dialer.
+//
+// One or more Relay TCP addresses must be specified in "addrs" argument.
+// Hostname resolution is performed for each of them for environments with
+// dynamic DNS addition/removal. Thus, a single Relay endpoint as a hostname
+// should fit the best.
+func WithRelayDialer(dialer *relay.Dialer) Option {
+	return func(o *options) error {
+		o.relayDialer = dialer
 		return nil
 	}
 }

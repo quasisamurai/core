@@ -1,6 +1,7 @@
 package rest
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,9 +11,6 @@ import (
 	"reflect"
 	"strings"
 
-	"golang.org/x/net/context"
-
-	"github.com/noxiouz/zapctx/ctxlog"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -32,28 +30,35 @@ type Service struct {
 }
 
 type Server struct {
-	log         *zap.SugaredLogger
-	listeners   []net.Listener
 	servers     []*http.Server
 	services    map[string]*Service
 	decoder     Decoder
 	encoder     Encoder
 	interceptor grpc.UnaryServerInterceptor
+	log         *zap.SugaredLogger
 }
 
-func NewServer(opts ...Option) (*Server, error) {
+func NewServer(opts ...Option) *Server {
 	o := defaultOptions()
 	for _, opt := range opts {
 		opt(o)
 	}
 	return &Server{
-		log:         ctxlog.S(o.ctx),
-		listeners:   o.listeners,
+		log:         o.log.Sugar(),
 		services:    map[string]*Service{},
 		decoder:     o.decoder,
 		encoder:     o.encoder,
 		interceptor: o.interceptor,
-	}, nil
+	}
+}
+
+func (s *Server) Services() []string {
+	var names []string
+	for _, service := range s.services {
+		names = append(names, service.fullName[1:])
+	}
+
+	return names
 }
 
 func (s *Server) RegisterService(interfacePtr, concretePtr interface{}) error {
@@ -84,13 +89,13 @@ func (s *Server) RegisterService(interfacePtr, concretePtr interface{}) error {
 
 		//TODO: handle streaming
 		if method.Type.NumIn() != 2 {
-			s.log.Infof("skipping streaming %s", method)
+			s.log.Debugf("skipping streaming for method %s.%s", serviceName, method.Name)
 			continue
 		}
 		messageType := method.Type.In(1)
 		sstreamType := reflect.TypeOf((*grpc.ServerStream)(nil)).Elem()
 		if messageType.Implements(sstreamType) {
-			s.log.Infof("skipping streaming %s", method)
+			s.log.Debugf("skipping streaming for method %s.%s", serviceName, method.Name)
 			continue
 		}
 		if method.Type.NumOut() != 2 {
@@ -140,14 +145,14 @@ func (s *Server) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 	decodedReader, err := s.decoder.DecodeBody(r)
 	if err != nil {
-		s.log.Errorf("could not decode body - %s", err)
+		s.log.Errorf("could not decode body: %s", err)
 		rw.WriteHeader(http.StatusBadRequest)
-		rw.Write([]byte(fmt.Sprintf("could not decode body - %s", err)))
+		rw.Write([]byte(fmt.Sprintf("could not decode body: %s", err)))
 		return
 	}
 	rw, err = s.encoder.Encode(rw)
 	if err != nil {
-		s.log.Errorf("could not encode response writer - %s", err)
+		s.log.Errorf("could not encode response writer: %s", err)
 		return
 	}
 	body, _ := ioutil.ReadAll(decodedReader)
@@ -161,9 +166,9 @@ func (s *Server) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	requestValue := reflect.New(method.messageType)
 	err = json.Unmarshal(body, requestValue.Interface())
 	if err != nil {
-		s.log.Errorf("could not unmarshal body - %s", err)
+		s.log.Errorf("could not unmarshal body: %s", err)
 		rw.WriteHeader(http.StatusInternalServerError)
-		rw.Write([]byte(fmt.Sprintf("could not unmarshal body - %s", err)))
+		rw.Write([]byte(fmt.Sprintf("could not unmarshal body: %s", err)))
 		return
 	}
 
@@ -200,7 +205,7 @@ func (s *Server) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		rw.WriteHeader(http.StatusInternalServerError)
+		rw.WriteHeader(HTTPStatusFromError(err))
 		rw.Write([]byte(err.Error()))
 	} else {
 		data, err := json.Marshal(result)
@@ -214,14 +219,14 @@ func (s *Server) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) Serve() error {
+func (s *Server) Serve(listeners ...net.Listener) error {
 	group := errgroup.Group{}
-	for _, lis := range s.listeners {
+	for _, lis := range listeners {
 		l := lis
 		srv := http.Server{}
 		srv.Handler = s
 		group.Go(func() error {
-			s.log.Infof("going to listen on %s", l.Addr())
+			s.log.Infof("exposing REST server on %s", l.Addr())
 			err := srv.Serve(l)
 			s.Close()
 			return err

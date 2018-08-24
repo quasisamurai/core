@@ -1,68 +1,62 @@
 package sonm
 
-import (
-	"github.com/pkg/errors"
-)
-
-const (
-	NumBenchmarks = 12
-	NumNetflags   = 3
-)
+import "strings"
 
 func NewBenchmarks(benchmarks []uint64) (*Benchmarks, error) {
-	if len(benchmarks) < NumBenchmarks {
-		return nil, errors.Errorf("expected %d benchmarks, got %d", NumBenchmarks, len(benchmarks))
+	b := &Benchmarks{
+		Values: make([]uint64, len(benchmarks)),
 	}
-
-	return &Benchmarks{
-		CPUSysbenchMulti: benchmarks[0],
-		CPUSysbenchOne:   benchmarks[1],
-		CPUCores:         benchmarks[2],
-		RAMSize:          benchmarks[3],
-		StorageSize:      benchmarks[4],
-		NetTrafficIn:     benchmarks[5],
-		NetTrafficOut:    benchmarks[6],
-		GPUCount:         benchmarks[7],
-		GPUMem:           benchmarks[8],
-		GPUEthHashrate:   benchmarks[9],
-		GPUCashHashrate:  benchmarks[10],
-		GPURedshift:      benchmarks[11],
-	}, nil
+	copy(b.Values, benchmarks)
+	if err := b.Validate(); err != nil {
+		return nil, err
+	}
+	return b, nil
 }
 
 func (m *Benchmarks) ToArray() []uint64 {
-	return []uint64{
-		m.CPUSysbenchMulti,
-		m.CPUSysbenchOne,
-		m.CPUCores,
-		m.RAMSize,
-		m.StorageSize,
-		m.NetTrafficIn,
-		m.NetTrafficOut,
-		m.GPUCount,
-		m.GPUMem,
-		m.GPUEthHashrate,
-		m.GPUCashHashrate,
-		m.GPURedshift,
-	}
+	return m.Values
 }
 
-func UintToNetflags(flags uint64) [NumNetflags]bool {
-	var fixedNetflags [3]bool
-	for idx := 0; idx < NumNetflags; idx++ {
-		fixedNetflags[NumNetflags-1-idx] = flags&(1<<uint64(idx)) != 0
-	}
-
-	return fixedNetflags
+func (m *Benchmarks) Contains(other *Benchmarks) bool {
+	return m.CPUSysbenchMulti() >= other.CPUSysbenchMulti() &&
+		m.CPUSysbenchOne() >= other.CPUSysbenchOne() &&
+		m.CPUCores() >= other.CPUCores() &&
+		m.RAMSize() >= other.RAMSize() &&
+		m.StorageSize() >= other.StorageSize() &&
+		m.NetTrafficIn() >= other.NetTrafficIn() &&
+		m.NetTrafficOut() >= other.NetTrafficOut() &&
+		m.GPUCount() >= other.GPUCount() &&
+		m.GPUMem() >= other.GPUMem() &&
+		m.GPUEthHashrate() >= other.GPUEthHashrate() &&
+		m.GPUCashHashrate() >= other.GPUCashHashrate() &&
+		m.GPURedshift() >= other.GPURedshift()
 }
 
-func NetflagsToUint(flags [NumNetflags]bool) uint64 {
-	var netflags uint64
-	for idx, flag := range flags {
-		if flag {
-			netflags |= 1 << uint64(NumNetflags-1-idx)
-		}
+// GetAttributeName converts profile cert attr number to
+// human readable name.
+func (m *Certificate) GetAttributeName() string {
+	attrs := map[uint64]string{
+		1201: "KYC2",
+		1301: "KYC3",
+		1401: "KYC4",
+		1302: "Logo",
+		1102: "Name",
+		1202: "Website",
+		2201: "Phone",
+		1303: "Country",
+		2202: "E-mail",
+		2203: "Social networks",
+		1304: "Is corporation",
+		1103: "Description",
+		1104: "KYC URL",
+		1105: "KYC icon",
+		1106: "KYC Price",
 	}
 
-	return netflags
+	return attrs[m.GetAttribute()]
+}
+
+// GetAttributeNameNormalized returns GetAttributeName with spaces replaced by underscores.
+func (m *Certificate) GetAttributeNameNormalized() string {
+	return strings.Replace(m.GetAttributeName(), " ", "_", -1)
 }

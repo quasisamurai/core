@@ -6,17 +6,19 @@ import (
 	"math/big"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/sonm-io/core/util"
 	"github.com/sonm-io/core/util/datasize"
 )
 
 var bigEther = big.NewFloat(params.Ether).SetPrec(256)
 
 var priceSuffixes = map[string]big.Float{
-	"SNM/s": *bigEther,
-	"SNM/h": *big.NewFloat(0).SetPrec(256).Quo(bigEther, big.NewFloat(3600)),
+	"USD/s": *bigEther,
+	"USD/h": *big.NewFloat(0).SetPrec(256).Quo(bigEther, big.NewFloat(3600)),
 }
 
 var possiblePriceSuffixxes = func() string {
@@ -51,28 +53,51 @@ func (m *Duration) UnmarshalYAML(unmarshal func(interface{}) error) error {
 }
 
 func (m *EthAddress) Unwrap() common.Address {
+	if m == nil {
+		return common.Address{}
+	}
 	return common.BytesToAddress(m.Address)
 }
 
-func (m *EthAddress) MarshalYAML() (interface{}, error) {
-	return m.Unwrap().Hex(), nil
+func (m EthAddress) MarshalText() ([]byte, error) {
+	return []byte(m.Unwrap().Hex()), nil
 }
 
-func (m *EthAddress) UnmarshalYAML(unmarshal func(interface{}) error) error {
-	var v string
-	if err := unmarshal(&v); err != nil {
-		return err
-	}
-
+func (m *EthAddress) UnmarshalText(text []byte) error {
+	v := string(text)
 	if !common.IsHexAddress(v) {
-		return errors.New("invalid ethereum address format")
+		return fmt.Errorf("invalid ethereum address format \"%s\"", v)
 	}
 
 	m.Address = common.HexToAddress(v).Bytes()
 	return nil
 }
 
+func (m *EthAddress) IsZero() bool {
+	if m == nil {
+		return true
+	}
+
+	return m.Unwrap().Big().BitLen() == 0
+}
+
+func NewEthAddress(addr common.Address) *EthAddress {
+	return &EthAddress{Address: addr.Bytes()}
+}
+
+func NewEthAddressFromHex(hexAddr string) (*EthAddress, error) {
+	addr, err := util.HexToAddress(hexAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EthAddress{Address: addr.Bytes()}, nil
+}
+
 func (m *DataSize) Unwrap() datasize.ByteSize {
+	if m == nil {
+		return datasize.ByteSize{}
+	}
 	return datasize.NewByteSize(m.Bytes)
 }
 
@@ -97,6 +122,9 @@ func (m *DataSize) MarshalYAML() (interface{}, error) {
 }
 
 func (m *DataSizeRate) Unwrap() datasize.BitRate {
+	if m == nil {
+		return datasize.BitRate{}
+	}
 	return datasize.NewBitRate(m.BitsPerSecond)
 }
 
@@ -126,16 +154,15 @@ func (m *Price) MarshalYAML() (interface{}, error) {
 	div.Quo(div, big.NewFloat(3600.))
 
 	r := big.NewFloat(0).Quo(v, div)
-	return r.Text('g', 10) + " SNM/h", nil
+	return r.Text('g', 10) + " USD/h", nil
 }
 
 func (m *Price) UnmarshalYAML(unmarshal func(interface{}) error) error {
-	var v string
-	if err := unmarshal(&v); err != nil {
+	var text string
+	if err := unmarshal(&text); err != nil {
 		return err
 	}
-
-	if err := m.LoadFromString(v); err != nil {
+	if err := m.LoadFromString(text); err != nil {
 		return err
 	}
 
@@ -143,12 +170,17 @@ func (m *Price) UnmarshalYAML(unmarshal func(interface{}) error) error {
 }
 
 func (m *Price) LoadFromString(v string) error {
-	parts := strings.FieldsFunc(v, func(c rune) bool {
-		return c == ' '
+	delimAt := strings.IndexFunc(v, func(c rune) bool {
+		return unicode.IsLetter(c)
 	})
 
-	if len(parts) != 2 {
+	if delimAt < 0 {
 		return fmt.Errorf("could not load price - %s can not be split to numeric and dimension parts", v)
+	}
+
+	parts := []string{
+		strings.TrimSpace(v[:delimAt]),
+		strings.TrimSpace(v[delimAt:]),
 	}
 
 	dimensionMultiplier, ok := priceSuffixes[parts[1]]
@@ -164,4 +196,15 @@ func (m *Price) LoadFromString(v string) error {
 	m.PerSecond = NewBigInt(price)
 
 	return nil
+}
+
+func (m *StartTaskRequest) Validate() error {
+	if m.GetDealID().IsZero() {
+		return errors.New("non-zero deal id is required for start task request")
+	}
+	return m.GetSpec().Validate()
+}
+
+func (m *TaskSpec) Validate() error {
+	return m.GetContainer().Validate()
 }

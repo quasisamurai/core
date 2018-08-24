@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"context"
 	"net"
 
 	"github.com/hashicorp/memberlist"
@@ -8,7 +9,6 @@ import (
 	"github.com/sonm-io/core/util"
 	"github.com/sonm-io/core/util/xgrpc"
 	"go.uber.org/zap"
-	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 )
 
@@ -19,13 +19,14 @@ type monitor struct {
 	server      *grpc.Server
 	listener    net.Listener
 
-	cluster *memberlist.Memberlist
+	cluster     *memberlist.Memberlist
+	meetingRoom *meetingRoom
 
 	metrics *metrics
 	log     *zap.Logger
 }
 
-func newMonitor(cfg MonitorConfig, cluster *memberlist.Memberlist, metrics *metrics, log *zap.Logger) (*monitor, error) {
+func newMonitor(cfg MonitorConfig, cluster *memberlist.Memberlist, meetingRoom *meetingRoom, metrics *metrics, log *zap.Logger) (*monitor, error) {
 	certificate, TLSConfig, err := util.NewHitlessCertRotator(context.Background(), cfg.PrivateKey)
 	if err != nil {
 		return nil, err
@@ -36,6 +37,7 @@ func newMonitor(cfg MonitorConfig, cluster *memberlist.Memberlist, metrics *metr
 	server := xgrpc.NewServer(log,
 		xgrpc.Credentials(credentials),
 		xgrpc.DefaultTraceInterceptor(),
+		xgrpc.RequestLogInterceptor(log),
 		xgrpc.VerifyInterceptor(),
 	)
 
@@ -44,6 +46,7 @@ func newMonitor(cfg MonitorConfig, cluster *memberlist.Memberlist, metrics *metr
 		certificate: certificate,
 		server:      server,
 		cluster:     cluster,
+		meetingRoom: meetingRoom,
 		metrics:     metrics,
 		log:         log,
 	}
@@ -66,6 +69,14 @@ func (m *monitor) Cluster(ctx context.Context, request *sonm.Empty) (*sonm.Relay
 
 func (m *monitor) Metrics(ctx context.Context, request *sonm.Empty) (*sonm.RelayMetrics, error) {
 	return m.metrics.Dump(), nil
+}
+
+func (m *monitor) Info(ctx context.Context, request *sonm.Empty) (*sonm.RelayInfo, error) {
+	meeting, err := m.meetingRoom.Info()
+	if err != nil {
+		return nil, err
+	}
+	return &sonm.RelayInfo{State: meeting}, nil
 }
 
 func (m *monitor) Serve() error {

@@ -80,6 +80,10 @@ func (m Addr) String() string {
 	return m.netAddr
 }
 
+func (m Addr) MarshalText() ([]byte, error) {
+	return []byte(m.String()), nil
+}
+
 func (m *Addr) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	var addr string
 	if err := unmarshal(&addr); err != nil {
@@ -88,7 +92,7 @@ func (m *Addr) UnmarshalYAML(unmarshal func(interface{}) error) error {
 
 	value, err := NewAddr(addr)
 	if err != nil {
-		return fmt.Errorf("cannot convert `%s` into an `auth.Addr` address - %s", addr, err)
+		return fmt.Errorf("cannot convert `%s` into an `auth.Addr` address: %s", addr, err)
 	}
 
 	*m = *value

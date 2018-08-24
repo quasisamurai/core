@@ -1,108 +1,253 @@
 package commands
 
 import (
+	"context"
+	"fmt"
 	"math/big"
-	"os"
+	"time"
 
-	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/sonm-io/core/blockchain"
-	"github.com/sonm-io/core/blockchain/market"
-	"github.com/sonm-io/core/util"
+	"github.com/sonm-io/core/proto"
 	"github.com/spf13/cobra"
+	"github.com/tcnksm/go-input"
 )
 
-var getTokenCmd = &cobra.Command{
-	Use:    "get",
-	Short:  "Get SONM test tokens (ERC20)",
-	PreRun: loadKeyStoreWrapper,
-	Run: func(cmd *cobra.Command, args []string) {
-		bch, err := blockchain.NewAPI()
-		if err != nil {
-			showError(cmd, "Cannot create blockchain connection", err)
-			os.Exit(1)
-		}
+var (
+	forceTransferFlag bool
+)
 
+func init() {
+	tokenRootCmd.AddCommand(
+		// tokenGetCmd,
+		tokenBalanceCmd,
+		tokenDepositCmd,
+		tokenWithdrawCmd,
+		tokenMarketAllowanceCmd,
+		tokenTransferCmd,
+	)
+
+	tokenTransferCmd.Flags().BoolVar(&forceTransferFlag, "force", false, "Do not prompt for tokens transfer")
+}
+
+var tokenRootCmd = &cobra.Command{
+	Use:               "token",
+	Short:             "Manage tokens",
+	PersistentPreRunE: loadKeyStoreWrapper,
+}
+
+var tokenGetCmd = &cobra.Command{
+	Use:   "get",
+	Short: "Get SONM test tokens (ERC20)",
+	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := newTimeoutContext()
 		defer cancel()
 
-		tx, err := bch.GetTokens(ctx, sessionKey)
+		token, err := newTokenManagementClient(ctx)
 		if err != nil {
-			showError(cmd, "Cannot get tokens", err)
-			os.Exit(1)
+			return fmt.Errorf("cannot create client connection: %v", err)
 		}
 
-		printTransactionInfo(cmd, tx)
+		if _, err := token.TestTokens(ctx, &sonm.Empty{}); err != nil {
+			return fmt.Errorf("cannot get tokens: %v", err)
+		}
+
+		showOk(cmd)
+		return nil
 	},
 }
 
-var getBalanceCmd = &cobra.Command{
-	Use:    "balance",
-	Short:  "Show SONM token balance (ERC20)",
-	PreRun: loadKeyStoreWrapper,
-	Run: func(cmd *cobra.Command, args []string) {
-		bch, err := blockchain.NewAPI()
-		if err != nil {
-			showError(cmd, "Cannot create blockchain connection", err)
-			os.Exit(1)
-		}
-
+var tokenBalanceCmd = &cobra.Command{
+	Use:   "balance [addr]",
+	Short: "Show SONM token balance (ERC20)",
+	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := newTimeoutContext()
 		defer cancel()
 
-		addr := crypto.PubkeyToAddress(sessionKey.PublicKey).Hex()
-		balance, err := bch.BalanceOf(ctx, addr)
+		token, err := newTokenManagementClient(ctx)
 		if err != nil {
-			showError(cmd, "Cannot get tokens", err)
-			os.Exit(1)
+			return fmt.Errorf("cannot create client connection: %v", err)
+		}
+
+		var balance *sonm.BalanceReply
+		if len(args) > 0 {
+			to, err := sonm.NewEthAddressFromHex(args[0])
+			if err != nil {
+				return fmt.Errorf("failed to parse address: %v", err)
+			}
+
+			balance, err = token.BalanceOf(ctx, to)
+		} else {
+			balance, err = token.Balance(ctx, &sonm.Empty{})
+		}
+
+		if err != nil {
+			return fmt.Errorf("cannot load balance: %v", err)
 		}
 
 		printBalanceInfo(cmd, balance)
+		return nil
 	},
 }
 
-var approveTokenCmd = &cobra.Command{
-	Use:    "approve <amount>",
-	Short:  "Approve tokens (ERC20)",
-	PreRun: loadKeyStoreWrapper,
-	Args:   cobra.MinimumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		var zero = big.NewInt(0)
+var tokenDepositCmd = &cobra.Command{
+	Use:   "deposit <amount>",
+	Short: "Transfer funds from masterchain to SONM blockchain",
+	Args:  cobra.MinimumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
+		defer cancel()
 
-		bch, err := blockchain.NewAPI()
+		token, err := newTokenManagementClient(ctx)
 		if err != nil {
-			showError(cmd, "Cannot create blockchain connection", err)
-			os.Exit(1)
+			return fmt.Errorf("cannot create client connection: %v", err)
 		}
 
-		amount, err := util.StringToEtherPrice(args[0])
+		amount, err := sonm.NewBigIntFromString(args[0])
 		if err != nil {
-			showError(cmd, "Invalid parameter", err)
-			os.Exit(1)
+			return err
 		}
 
+		if _, err := token.Deposit(ctx, amount); err != nil {
+			return fmt.Errorf("cannot deposit funds: %v", err)
+		}
+
+		showOk(cmd)
+		return nil
+	},
+}
+
+var tokenWithdrawCmd = &cobra.Command{
+	Use:   "withdraw <amount>",
+	Short: "Transfer funds from SONM blockchain to masterchain",
+	Args:  cobra.MinimumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, cancel := newTimeoutContext()
 		defer cancel()
 
-		currentAllowance, err := bch.AllowanceOf(ctx, crypto.PubkeyToAddress(sessionKey.PublicKey).String(), market.SNMTAddress)
+		token, err := newTokenManagementClient(ctx)
 		if err != nil {
-			showError(cmd, "Cannot get allowance ", err)
-			os.Exit(1)
+			return fmt.Errorf("cannot create client connection: %v", err)
 		}
 
-		if currentAllowance.Cmp(zero) != 0 {
-			_, err = bch.Approve(ctx, sessionKey, market.SNMTAddress, zero)
-			if err != nil {
-				showError(cmd, "Cannot set approved value to zero", err)
-				os.Exit(1)
+		amount, err := sonm.NewBigIntFromString(args[0])
+		if err != nil {
+			return err
+		}
+
+		if _, err := token.Withdraw(ctx, amount); err != nil {
+			return fmt.Errorf("cannot withdraw funds: %v", err)
+		}
+
+		showOk(cmd)
+		return nil
+	},
+}
+
+var tokenMarketAllowanceCmd = &cobra.Command{
+	Use:   "allowance",
+	Short: "Show current allowance for marketplace on sidechain network",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx, cancel := newTimeoutContext()
+		defer cancel()
+
+		token, err := newTokenManagementClient(ctx)
+		if err != nil {
+			return fmt.Errorf("cannot create client connection: %v", err)
+		}
+
+		allowance, err := token.MarketAllowance(ctx, &sonm.Empty{})
+		if err != nil {
+			return fmt.Errorf("cannot get allowance: %v", err)
+		}
+
+		printMarketAllowance(cmd, allowance)
+		return nil
+	},
+}
+
+var tokenTransferCmd = &cobra.Command{
+	Use:   "transfer TO AMOUNT",
+	Short: "Transfers SNM tokens from one account to another on sidechain network",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Explicitly disable timeouts here, because retrying transferring
+		// tokens in case of timeouts can be dangerous.
+		ctx := context.Background()
+
+		to, err := sonm.NewEthAddressFromHex(args[0])
+		if err != nil {
+			return fmt.Errorf("failed to parse `to` address: %v", err)
+		}
+
+		amount, _, err := big.ParseFloat(args[1], 10, 256, big.ToNearestEven)
+		if err != nil {
+			return fmt.Errorf("failed to parse amount: %v", err)
+		}
+
+		amountInt, _ := new(big.Float).Mul(amount, big.NewFloat(1e18)).Int(nil)
+		amountSNM := sonm.NewBigInt(amountInt)
+
+		if !forceTransferFlag {
+			if err := showTransferPrompt(amountSNM, to); err != nil {
+				return err
 			}
 		}
 
-		tx, err := bch.Approve(ctx, sessionKey, market.SNMTAddress, amount)
+		token, err := newTokenManagementClient(ctx)
 		if err != nil {
-			showError(cmd, "Cannot approve tokens", err)
-			os.Exit(1)
+			return fmt.Errorf("cannot create client connection: %v", err)
 		}
 
-		printTransactionInfo(cmd, tx)
+		_, err = token.Transfer(ctx, &sonm.TokenTransferRequest{
+			To:     to,
+			Amount: amountSNM,
+		})
+
+		if err != nil {
+			return fmt.Errorf("failed to transfer tokens: %v", err)
+		}
+
+		showOk(cmd)
+
+		return nil
 	},
+}
+
+func showTransferPrompt(amount *sonm.BigInt, to *sonm.EthAddress) error {
+	from, err := keystore.GetDefaultAddress()
+	if err != nil {
+		return fmt.Errorf("failed to extract `from` address from keystore: %v", err)
+	}
+
+	ui := input.DefaultUI()
+	prompt := fmt.Sprintf("After this operation %s of SNM tokens will be transferred from %s to %s. Do you want to continue? (yes/no)",
+		amount.ToPriceString(),
+		from.Hex(),
+		to.Unwrap().Hex(),
+	)
+	yesNo, err := ui.Ask(prompt, &input.Options{
+		Default:  "",
+		Required: true,
+		Loop:     true,
+		ValidateFunc: func(v string) error {
+			if v == "yes" || v == "no" {
+				return nil
+			}
+
+			return fmt.Errorf("type `yes` or `no`")
+		},
+	})
+
+	if err != nil {
+		return err
+	}
+
+	switch yesNo {
+	case "yes":
+	case "no":
+		return fmt.Errorf("canceled")
+	default:
+		return fmt.Errorf("invalid input: %s", yesNo)
+	}
+
+	return nil
 }
